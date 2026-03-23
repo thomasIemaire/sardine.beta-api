@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(ruff check:*)",
+      "Bash(python -c \"from app.features.agents.router import router; from app.features.flows.router import router; print\\(''OK''\\)\")",
+      "Bash(python -c \"from app.core.avatar import generate_avatar; print\\(''OK''\\)\")"
+    ]
+  }
+}
