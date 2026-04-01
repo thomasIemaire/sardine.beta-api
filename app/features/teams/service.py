@@ -326,7 +326,10 @@ async def get_team_tree(org_id: str, user: User) -> list[dict]:
         Team.organization_id == PydanticObjectId(org_id)
     ).to_list()
 
-    all_hierarchies = await TeamHierarchy.find().to_list()
+    team_ids = [t.id for t in all_teams]
+    all_hierarchies = await TeamHierarchy.find(
+        {"parent_team_id": {"$in": team_ids}}
+    ).to_list()
 
     # Memberships de l'utilisateur courant pour le flag "is_member"
     user_memberships = await TeamMember.find(

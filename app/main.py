@@ -126,10 +126,34 @@ storage_dir = Path("storage")
 storage_dir.mkdir(exist_ok=True)
 (storage_dir / "avatars").mkdir(exist_ok=True)
 (storage_dir / "files").mkdir(exist_ok=True)
-app.mount("/storage", StaticFiles(directory="storage"), name="storage")
+from starlette.middleware import Middleware
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+_static_app = StaticFiles(directory="storage")
+
+
+class NoCacheStaticFiles:
+    """Wrapper qui ajoute Cache-Control: no-cache sur les fichiers statiques."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        async def send_with_no_cache(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"cache-control", b"no-cache"))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_no_cache)
+
+
+app.mount("/storage", NoCacheStaticFiles(_static_app), name="storage")
 
 # ─── Montage des routers par feature ─────────────────────────────
 
+from app.features.api_keys.router import router as api_keys_router
 from app.features.agents.router import router as agents_router
 from app.features.audit.router import router as audit_router
 from app.features.auth.router import router as auth_router
@@ -157,6 +181,7 @@ app.include_router(files_router, prefix="/api")
 app.include_router(tags_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
+app.include_router(api_keys_router, prefix="/api")
 
 
 @app.get("/health", tags=["Health"])

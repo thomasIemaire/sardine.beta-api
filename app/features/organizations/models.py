@@ -25,9 +25,7 @@ class Organization(Document):
 
     status: int = Field(default=Status.ACTIVE)
 
-    # Restrictions de fichiers (US-FILE-03) — null = pas de restriction
-    max_file_size_mb: int | None = None  # Taille max par fichier en Mo
-    allowed_extensions: list[str] | None = None  # Ex: [".pdf", ".docx", ".jpg"]
+    contact_email: str | None = None  # Email de contact de l'organisation
 
     # Champs optionnels
     external_reference: str | None = None

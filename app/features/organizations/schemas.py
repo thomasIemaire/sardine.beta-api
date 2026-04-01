@@ -4,7 +4,7 @@ Schémas Pydantic pour les organisations.
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 from app.core.enums import STATUS_LABELS
 
@@ -25,12 +25,29 @@ class OrganizationInvite(BaseModel):
 class OrganizationUpdate(BaseModel):
     """Modification d'une organisation."""
     name: str | None = None
+    contact_email: str | None = None
     external_reference: str | None = None
     distributor_org_id: str | None = None
     parent_org_id: str | None = None
     status: int | None = None  # 0 = Inactif, 1 = Actif
-    max_file_size_mb: int | None = None
-    allowed_extensions: list[str] | None = None
+
+
+class BulkInviteMember(BaseModel):
+    """Un membre à inviter en masse."""
+    email: EmailStr
+    password: str
+
+
+class BulkInviteRequest(BaseModel):
+    """Invitation en masse de membres dans une organisation."""
+    members: list[BulkInviteMember]
+
+
+class BulkInviteResult(BaseModel):
+    """Résultat d'une invitation individuelle."""
+    email: str
+    status: str  # "created" | "existing" | "error"
+    detail: str
 
 
 class OrganizationRead(BaseModel):
@@ -40,11 +57,10 @@ class OrganizationRead(BaseModel):
     is_private: bool
     status: int
     status_label: str
+    contact_email: str | None
     external_reference: str | None
     distributor_org_id: str | None
     parent_org_id: str | None
-    max_file_size_mb: int | None
-    allowed_extensions: list[str] | None
     owner_id: str
     created_at: datetime
 
@@ -56,11 +72,10 @@ class OrganizationRead(BaseModel):
             is_private=org.is_private,
             status=org.status,
             status_label=STATUS_LABELS.get(org.status, "Inconnu"),
+            contact_email=org.contact_email,
             external_reference=org.external_reference,
             distributor_org_id=str(org.distributor_org_id) if org.distributor_org_id else None,
             parent_org_id=str(org.parent_org_id) if org.parent_org_id else None,
-            max_file_size_mb=org.max_file_size_mb,
-            allowed_extensions=org.allowed_extensions,
             owner_id=str(org.owner_id),
             created_at=org.created_at,
         )

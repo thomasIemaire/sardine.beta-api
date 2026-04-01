@@ -13,6 +13,7 @@ venv/
 env/
 
 # IDE
+.claude/
 .vscode/
 .idea/
 *.swp
@@ -29,3 +30,4 @@ htmlcov/
 
 # Storage (generated files: avatars, uploads, etc.)
 storage/
+docs/

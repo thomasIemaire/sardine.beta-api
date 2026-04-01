@@ -32,31 +32,6 @@ def _get_extension(filename: str) -> str:
     return Path(filename).suffix.lower()
 
 
-async def _validate_upload(
-    org: Organization, upload: UploadFile, file_size: int,
-) -> None:
-    """
-    US-FILE-03 : Valide les restrictions d'upload de l'organisation.
-    Verifie la taille et le type du fichier.
-    """
-    # Verifier la taille
-    if org.max_file_size_mb is not None:
-        max_bytes = org.max_file_size_mb * 1024 * 1024
-        if file_size > max_bytes:
-            raise ValidationError(
-                f"Le fichier depasse la taille maximale autorisee "
-                f"({org.max_file_size_mb} Mo)"
-            )
-
-    # Verifier l'extension
-    if org.allowed_extensions is not None and len(org.allowed_extensions) > 0:
-        ext = _get_extension(upload.filename or "")
-        if ext not in org.allowed_extensions:
-            raise ValidationError(
-                f"Type de fichier non autorise ({ext}). "
-                f"Extensions acceptees : {', '.join(org.allowed_extensions)}"
-            )
-
 
 async def _resolve_duplicate_name(
     name: str, folder_id: PydanticObjectId, exclude_id: PydanticObjectId | None = None,
@@ -122,9 +97,6 @@ async def upload_file(
     # Lire le contenu du fichier
     content = await upload.read()
     file_size = len(content)
-
-    # Validation des restrictions (US-FILE-03)
-    await _validate_upload(org, upload, file_size)
 
     filename = upload.filename or "sans_nom"
     ext = _get_extension(filename)
@@ -234,7 +206,6 @@ async def upload_new_version(
 
     content = await upload.read()
     file_size = len(content)
-    await _validate_upload(org, upload, file_size)
 
     filename = upload.filename or file_doc.name
     ext = _get_extension(filename)

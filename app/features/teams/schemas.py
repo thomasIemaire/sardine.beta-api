@@ -60,6 +60,7 @@ class MemberRead(BaseModel):
     sont hérités d'une équipe parente.
     """
     user_id: str
+    email: str
     first_name: str
     last_name: str
     role: int
@@ -72,6 +73,7 @@ class MemberRead(BaseModel):
     def from_member(cls, member, user, inherited: bool = False) -> "MemberRead":
         return cls(
             user_id=str(member.user_id),
+            email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
             role=member.role,

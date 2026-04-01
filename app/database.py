@@ -19,6 +19,7 @@ async def init_db() -> None:
     Appelée au démarrage via le lifespan de FastAPI.
     """
     # Import de tous les models pour que Beanie les enregistre
+    from app.features.api_keys.models import ApiKey
     from app.features.agents.models import Agent, AgentShare, AgentVersion
     from app.features.audit.models import AuditLog
     from app.features.auth.models import TokenBlacklist, User
@@ -56,5 +57,6 @@ async def init_db() -> None:
             Tag,
             FolderTeamPermission,
             FolderMemberPermission,
+            ApiKey,
         ],
     )

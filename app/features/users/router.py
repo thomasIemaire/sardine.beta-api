@@ -43,6 +43,16 @@ async def update_current_user(
     return UserRead.from_user(user)
 
 
+@router.post("/me/refresh-avatar", response_model=UserRead)
+async def refresh_avatar(current_user: CurrentUser):
+    """Régénère l'avatar de l'utilisateur courant (nouveau gradient aléatoire)."""
+    from app.core.avatar import generate_avatar
+
+    avatar_path = generate_avatar(str(current_user.id))
+    await current_user.set({"avatar_path": avatar_path})
+    return UserRead.from_user(current_user)
+
+
 # ─── Administration ───────────────────────────────────────────────
 
 @router.get("/admin/list")
