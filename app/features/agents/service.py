@@ -320,8 +320,11 @@ async def list_agent_shares(
     ).to_list()
 
 
-async def list_shared_agents(user: User, org_id: str) -> list[Agent]:
-    """Liste les agents partagés avec mon organisation (lecture seule)."""
+async def list_shared_agents(user: User, org_id: str) -> list[tuple[Agent, dict | None]]:
+    """
+    Liste les agents partagés avec mon organisation (lecture seule).
+    Retourne chaque agent avec le schema de sa version active.
+    """
     await check_org_membership(user, org_id)
 
     shares = await AgentShare.find(
@@ -332,7 +335,18 @@ async def list_shared_agents(user: User, org_id: str) -> list[Agent]:
     if not agent_ids:
         return []
 
-    return await Agent.find({"_id": {"$in": agent_ids}}).sort("-created_at").to_list()
+    agents = await Agent.find({"_id": {"$in": agent_ids}}).sort("-created_at").to_list()
+
+    result = []
+    for agent in agents:
+        active_schema = None
+        if agent.active_version_id:
+            version = await AgentVersion.get(agent.active_version_id)
+            if version:
+                active_schema = version.schema_data
+        result.append((agent, active_schema))
+
+    return result
 
 
 async def get_shared_agent(

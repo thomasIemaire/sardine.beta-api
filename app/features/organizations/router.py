@@ -10,6 +10,8 @@ from app.features.auth.schemas import MessageResponse
 from app.features.organizations.schemas import (
     BulkInviteRequest,
     BulkInviteResult,
+    MemberRoleUpdate,
+    MemberStatusUpdate,
     OrganizationCreate,
     OrganizationInvite,
     OrganizationRead,
@@ -24,6 +26,8 @@ from app.features.organizations.service import (
     list_organization_members,
     list_owned_organizations,
     list_user_organizations,
+    update_member_role,
+    update_member_status,
     update_organization,
 )
 from app.features.teams.schemas import MemberRead
@@ -51,11 +55,15 @@ async def update_org(org_id: str, payload: OrganizationUpdate, current_user: Cur
 @router.get("/", response_model=list[OrganizationRead])
 async def list_orgs(current_user: CurrentUser):
     """
-    Liste de toutes les organisations accessibles.
+    Liste de toutes les organisations visibles.
+    Inclut les orgs désactivées (is_active_member=false → cadenas côté front).
     L'organisation privée est toujours en premier.
     """
-    orgs = await list_user_organizations(current_user)
-    return [OrganizationRead.from_org(o) for o in orgs]
+    items = await list_user_organizations(current_user)
+    return [
+        OrganizationRead.from_org(item["org"], is_active_member=item["is_active_member"])
+        for item in items
+    ]
 
 
 @router.get("/owned", response_model=list[OrganizationRead])
@@ -100,6 +108,28 @@ async def invite_bulk(
     """
     results = await bulk_invite_members(current_user, org_id, payload.members)
     return results
+
+
+@router.patch("/{org_id}/members/{user_id}/role", response_model=MemberRead)
+async def update_org_member_role(
+    org_id: str, user_id: str, payload: MemberRoleUpdate, current_user: CurrentUser,
+):
+    """Changer le rôle d'un membre (1=Owner, 2=Member). Owner requis."""
+    membership = await update_member_role(current_user, org_id, user_id, payload.role)
+    from app.features.auth.models import User as UserModel
+    target_user = await UserModel.get(membership.user_id)
+    return MemberRead.from_member(membership, target_user)
+
+
+@router.patch("/{org_id}/members/{user_id}/status", response_model=MemberRead)
+async def update_org_member_status(
+    org_id: str, user_id: str, payload: MemberStatusUpdate, current_user: CurrentUser,
+):
+    """Activer ou désactiver un membre de l'organisation. Owner requis."""
+    membership = await update_member_status(current_user, org_id, user_id, payload.status)
+    from app.features.auth.models import User as UserModel
+    target_user = await UserModel.get(membership.user_id)
+    return MemberRead.from_member(membership, target_user)
 
 
 # ─── Invitations ─────────────────────────────────────────────────

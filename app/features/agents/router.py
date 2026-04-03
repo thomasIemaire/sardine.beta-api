@@ -72,8 +72,8 @@ async def list_all(
 @router.get("/shared", response_model=list[AgentRead])
 async def list_shared(org_id: str, current_user: CurrentUser):
     """Liste des agents partagés avec mon organisation (lecture seule)."""
-    agents = await list_shared_agents(current_user, org_id)
-    return [AgentRead.from_agent(a) for a in agents]
+    items = await list_shared_agents(current_user, org_id)
+    return [AgentRead.from_agent(a, active_schema=s) for a, s in items]
 
 
 @router.get("/shared/{agent_id}", response_model=AgentRead)

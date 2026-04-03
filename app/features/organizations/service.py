@@ -143,35 +143,59 @@ async def update_organization(
     return org
 
 
-async def list_user_organizations(user: User) -> list[Organization]:
+async def list_user_organizations(user: User) -> list[dict]:
     """
-    Liste des organisations accessibles à l'utilisateur.
-    Inclut : les organisations dont il est propriétaire
-    + celles où il est membre d'une équipe.
-    L'organisation privée apparaît en premier.
+    Liste des organisations visibles par l'utilisateur.
+    Inclut les orgs dont il est propriétaire (toujours actif)
+    + celles où il est membre (actif ou inactif).
+    Retourne des dicts {org, is_active_member} pour que le front
+    puisse afficher un cadenas sur les orgs désactivées.
     """
-    # 1. Organisations dont l'utilisateur est propriétaire
-    owned = await Organization.find(Organization.owner_id == user.id).to_list()
-    owned_ids = {str(o.id) for o in owned}
+    result_map: dict[str, dict] = {}
 
-    # 2. Organisations via membership d'équipe
+    # 1. Organisations dont l'utilisateur est propriétaire → toujours actif
+    owned = await Organization.find(Organization.owner_id == user.id).to_list()
+    for o in owned:
+        result_map[str(o.id)] = {"org": o, "is_active_member": True}
+
+    # 2. Organisations via membership d'équipe (actif ET inactif)
     memberships = await TeamMember.find(
         TeamMember.user_id == user.id,
-        TeamMember.status == Status.ACTIVE,
     ).to_list()
 
     team_ids = [m.team_id for m in memberships]
     if team_ids:
-        teams = await Team.find({"_id": {"$in": team_ids}}).to_list()
-        org_ids = [t.organization_id for t in teams if str(t.organization_id) not in owned_ids]
+        teams = await Team.find(
+            {"_id": {"$in": team_ids}, "is_root": True}
+        ).to_list()
 
-        if org_ids:
-            member_orgs = await Organization.find({"_id": {"$in": org_ids}}).to_list()
-            owned.extend(member_orgs)
+        # Map team_id → membership status
+        team_status = {str(m.team_id): m.status for m in memberships}
 
-    # Tri : organisation privée en premier, puis par nom
-    owned.sort(key=lambda o: (not o.is_private, o.name))
-    return owned
+        org_ids_to_fetch = [
+            t.organization_id for t in teams
+            if str(t.organization_id) not in result_map
+        ]
+
+        if org_ids_to_fetch:
+            member_orgs = await Organization.find(
+                {"_id": {"$in": org_ids_to_fetch}}
+            ).to_list()
+            for o in member_orgs:
+                # Trouver le statut via la root team de cette org
+                team_for_org = next(
+                    (t for t in teams if str(t.organization_id) == str(o.id)), None
+                )
+                is_active = (
+                    team_status.get(str(team_for_org.id)) == Status.ACTIVE
+                    if team_for_org else False
+                )
+                result_map[str(o.id)] = {"org": o, "is_active_member": is_active}
+
+    # Tri : org privée en premier, puis par nom
+    items = list(result_map.values())
+    items.sort(key=lambda x: (not x["org"].is_private, x["org"].name))
+    return items
 
 
 async def list_owned_organizations(user: User) -> list[Organization]:
@@ -257,6 +281,115 @@ async def list_organization_members(user: User, org_id: str) -> list[dict]:
             result.append({"member": member, "user": member_user})
 
     return result
+
+
+async def update_member_status(
+    owner: User, org_id: str, target_user_id: str, new_status: int,
+) -> TeamMember:
+    """
+    Active ou désactive un membre d'une organisation.
+    Owner requis. On ne peut pas désactiver le owner de l'org.
+    """
+    org = await Organization.get(PydanticObjectId(org_id))
+    if not org:
+        raise NotFoundError("Organisation non trouvée")
+    if str(org.owner_id) != str(owner.id):
+        raise ForbiddenError("Seul le propriétaire peut modifier le statut des membres")
+
+    # Empêcher de se désactiver soi-même (owner)
+    if str(target_user_id) == str(owner.id) and new_status == Status.INACTIVE:
+        raise ForbiddenError("Le propriétaire ne peut pas être désactivé")
+
+    root_team = await Team.find_one(
+        Team.organization_id == org.id, Team.is_root == True,  # noqa: E712
+    )
+    if not root_team:
+        raise NotFoundError("Équipe racine introuvable")
+
+    membership = await TeamMember.find_one(
+        TeamMember.team_id == root_team.id,
+        TeamMember.user_id == PydanticObjectId(target_user_id),
+    )
+    if not membership:
+        raise NotFoundError("Membre non trouvé dans cette organisation")
+
+    if membership.status == new_status:
+        raise ConflictError(
+            "Ce membre est déjà actif" if new_status == Status.ACTIVE
+            else "Ce membre est déjà désactivé"
+        )
+
+    from datetime import datetime, timezone
+    membership.status = new_status
+    await membership.save()
+
+    action = "MEMBER_ACTIVATE" if new_status == Status.ACTIVE else "MEMBER_DEACTIVATE"
+    target = await User.get(PydanticObjectId(target_user_id))
+    detail = f"Membre {target.email if target else target_user_id}"
+    await log_action(
+        user_id=owner.id,
+        action=action,
+        details=f"{detail} {'activé' if new_status == Status.ACTIVE else 'désactivé'} dans « {org.name} »",
+        organization_id=org.id,
+    )
+
+    return membership
+
+
+async def update_member_role(
+    owner: User, org_id: str, target_user_id: str, new_role: int,
+) -> TeamMember:
+    """
+    Change le rôle d'un membre dans l'équipe racine de l'organisation.
+    Owner requis. Il doit toujours rester au moins un Owner.
+    """
+    from app.core.enums import TEAM_ROLE_LABELS
+
+    org = await Organization.get(PydanticObjectId(org_id))
+    if not org:
+        raise NotFoundError("Organisation non trouvée")
+    if str(org.owner_id) != str(owner.id):
+        raise ForbiddenError("Seul le propriétaire peut modifier les rôles")
+
+    root_team = await Team.find_one(
+        Team.organization_id == org.id, Team.is_root == True,  # noqa: E712
+    )
+    if not root_team:
+        raise NotFoundError("Équipe racine introuvable")
+
+    membership = await TeamMember.find_one(
+        TeamMember.team_id == root_team.id,
+        TeamMember.user_id == PydanticObjectId(target_user_id),
+    )
+    if not membership:
+        raise NotFoundError("Membre non trouvé dans cette organisation")
+
+    if membership.role == new_role:
+        raise ConflictError("Ce membre a déjà ce rôle")
+
+    # Si on rétrograde un Owner → vérifier qu'il en reste au moins un autre
+    if membership.role == TeamMemberRole.OWNER and new_role == TeamMemberRole.MEMBER:
+        owner_count = await TeamMember.find(
+            TeamMember.team_id == root_team.id,
+            TeamMember.role == TeamMemberRole.OWNER,
+            TeamMember.status == Status.ACTIVE,
+        ).count()
+        if owner_count <= 1:
+            raise ForbiddenError("Il doit rester au moins un propriétaire dans l'organisation")
+
+    membership.role = new_role
+    await membership.save()
+
+    target = await User.get(PydanticObjectId(target_user_id))
+    role_label = TEAM_ROLE_LABELS.get(new_role, str(new_role))
+    await log_action(
+        user_id=owner.id,
+        action="MEMBER_ROLE_CHANGE",
+        details=f"{target.email if target else target_user_id} → {role_label} dans « {org.name} »",
+        organization_id=org.id,
+    )
+
+    return membership
 
 
 # ─── Invitations ─────────────────────────────────────────────────

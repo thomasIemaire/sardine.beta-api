@@ -256,7 +256,11 @@ async def refresh_access_token(refresh_token_str: str) -> tuple[str, str]:
     # Blacklister l'ancien refresh token (rotation)
     exp = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
     blacklisted = TokenBlacklist(jti=jti, expires_at=exp)
-    await blacklisted.insert()
+    try:
+        await blacklisted.insert()
+    except Exception:
+        # DuplicateKeyError = token déjà blacklisté (double appel front)
+        pass
 
     # Generer la nouvelle paire
     new_access = create_access_token(subject=str(user.id))

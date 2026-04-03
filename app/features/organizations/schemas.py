@@ -32,6 +32,16 @@ class OrganizationUpdate(BaseModel):
     status: int | None = None  # 0 = Inactif, 1 = Actif
 
 
+class MemberStatusUpdate(BaseModel):
+    """Activation / désactivation d'un membre d'organisation."""
+    status: int  # 0 = Inactif, 1 = Actif
+
+
+class MemberRoleUpdate(BaseModel):
+    """Changement de rôle d'un membre d'organisation."""
+    role: int  # 1 = Propriétaire (Owner), 2 = Membre
+
+
 class BulkInviteMember(BaseModel):
     """Un membre à inviter en masse."""
     email: EmailStr
@@ -62,10 +72,11 @@ class OrganizationRead(BaseModel):
     distributor_org_id: str | None
     parent_org_id: str | None
     owner_id: str
+    is_active_member: bool = True  # False = membre désactivé (cadenas côté front)
     created_at: datetime
 
     @classmethod
-    def from_org(cls, org) -> "OrganizationRead":
+    def from_org(cls, org, is_active_member: bool = True) -> "OrganizationRead":
         return cls(
             id=str(org.id),
             name=org.name,
@@ -77,5 +88,6 @@ class OrganizationRead(BaseModel):
             distributor_org_id=str(org.distributor_org_id) if org.distributor_org_id else None,
             parent_org_id=str(org.parent_org_id) if org.parent_org_id else None,
             owner_id=str(org.owner_id),
+            is_active_member=is_active_member,
             created_at=org.created_at,
         )
