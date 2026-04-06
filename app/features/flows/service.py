@@ -66,14 +66,38 @@ async def create_flow(
 
 async def list_flows(
     user: User, org_id: str, page: int = 1, page_size: int = 20,
+    *,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    creator: str | None = None,
+    origin: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    status: str | None = None,
 ):
-    """Liste tous les flows d'une organisation (pagine)."""
+    """Liste tous les flows d'une organisation (pagine, filtrable, triable)."""
+    from app.core.filters import build_filters, resolve_sort
     from app.core.pagination import paginate
 
     await check_org_membership(user, org_id)
 
-    query = Flow.find(Flow.organization_id == PydanticObjectId(org_id))
-    return await paginate(query, page, page_size, sort_field="-created_at")
+    filters = build_filters(
+        search=search, creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+        status=status,
+        valid_statuses={FlowStatus.ACTIVE, FlowStatus.ERROR, FlowStatus.PENDING},
+    )
+    sort_field = resolve_sort(
+        sort_by, sort_dir,
+        allowed_fields={"name", "created_at", "status"},
+    )
+
+    query = Flow.find(
+        Flow.organization_id == PydanticObjectId(org_id),
+        filters,
+    )
+    return await paginate(query, page, page_size, sort_field=sort_field)
 
 
 async def get_flow(
@@ -328,8 +352,21 @@ async def list_flow_shares(
     ).to_list()
 
 
-async def list_shared_flows(user: User, org_id: str) -> list[Flow]:
+async def list_shared_flows(
+    user: User, org_id: str,
+    *,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    creator: str | None = None,
+    origin: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    status: str | None = None,
+) -> list[Flow]:
     """Liste les flows partagés avec mon organisation (lecture seule)."""
+    from app.core.filters import build_filters, resolve_sort
+
     await check_org_membership(user, org_id)
 
     shares = await FlowShare.find(
@@ -340,7 +377,21 @@ async def list_shared_flows(user: User, org_id: str) -> list[Flow]:
     if not flow_ids:
         return []
 
-    return await Flow.find({"_id": {"$in": flow_ids}}).sort("-created_at").to_list()
+    filters = build_filters(
+        search=search, creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+        status=status,
+        valid_statuses={FlowStatus.ACTIVE, FlowStatus.ERROR, FlowStatus.PENDING},
+    )
+    sort_field = resolve_sort(
+        sort_by, sort_dir,
+        allowed_fields={"name", "created_at", "status"},
+    )
+
+    return await Flow.find(
+        {"_id": {"$in": flow_ids}},
+        filters,
+    ).sort(sort_field).to_list()
 
 
 async def get_shared_flow(

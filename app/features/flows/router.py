@@ -57,9 +57,23 @@ async def list_all(
     org_id: str, current_user: CurrentUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_dir: str | None = Query(None),
+    creator: str | None = Query(None),
+    origin: str | None = Query(None),
+    created_from: str | None = Query(None),
+    created_to: str | None = Query(None),
+    status: str | None = Query(None),
 ):
-    """Liste des flows de l'organisation (pagine)."""
-    result = await list_flows(current_user, org_id, page, page_size)
+    """Liste des flows de l'organisation (pagine, filtrable, triable)."""
+    result = await list_flows(
+        current_user, org_id, page, page_size,
+        search=search, sort_by=sort_by, sort_dir=sort_dir,
+        creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+        status=status,
+    )
     return {
         "items": [FlowRead.from_flow(f) for f in result.items],
         "total": result.total,
@@ -70,9 +84,25 @@ async def list_all(
 
 
 @router.get("/shared", response_model=list[FlowRead])
-async def list_shared(org_id: str, current_user: CurrentUser):
+async def list_shared(
+    org_id: str, current_user: CurrentUser,
+    search: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_dir: str | None = Query(None),
+    creator: str | None = Query(None),
+    origin: str | None = Query(None),
+    created_from: str | None = Query(None),
+    created_to: str | None = Query(None),
+    status: str | None = Query(None),
+):
     """Liste des flows partagés avec mon organisation (lecture seule)."""
-    flows = await list_shared_flows(current_user, org_id)
+    flows = await list_shared_flows(
+        current_user, org_id,
+        search=search, sort_by=sort_by, sort_dir=sort_dir,
+        creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+        status=status,
+    )
     return [FlowRead.from_flow(f) for f in flows]
 
 

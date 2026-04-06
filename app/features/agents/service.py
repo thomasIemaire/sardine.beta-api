@@ -65,14 +65,35 @@ async def create_agent(
 
 async def list_agents(
     user: User, org_id: str, page: int = 1, page_size: int = 20,
+    *,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    creator: str | None = None,
+    origin: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
 ):
-    """Liste tous les agents d'une organisation (pagine)."""
+    """Liste tous les agents d'une organisation (pagine, filtrable, triable)."""
+    from app.core.filters import build_filters, resolve_sort
     from app.core.pagination import paginate
 
     await check_org_membership(user, org_id)
 
-    query = Agent.find(Agent.organization_id == PydanticObjectId(org_id))
-    return await paginate(query, page, page_size, sort_field="-created_at")
+    filters = build_filters(
+        search=search, creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+    )
+    sort_field = resolve_sort(
+        sort_by, sort_dir,
+        allowed_fields={"name", "created_at", "percentage"},
+    )
+
+    query = Agent.find(
+        Agent.organization_id == PydanticObjectId(org_id),
+        filters,
+    )
+    return await paginate(query, page, page_size, sort_field=sort_field)
 
 
 async def get_agent(
@@ -320,11 +341,23 @@ async def list_agent_shares(
     ).to_list()
 
 
-async def list_shared_agents(user: User, org_id: str) -> list[tuple[Agent, dict | None]]:
+async def list_shared_agents(
+    user: User, org_id: str,
+    *,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    creator: str | None = None,
+    origin: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+) -> list[tuple[Agent, dict | None]]:
     """
     Liste les agents partagés avec mon organisation (lecture seule).
     Retourne chaque agent avec le schema de sa version active.
     """
+    from app.core.filters import build_filters, resolve_sort
+
     await check_org_membership(user, org_id)
 
     shares = await AgentShare.find(
@@ -335,7 +368,19 @@ async def list_shared_agents(user: User, org_id: str) -> list[tuple[Agent, dict 
     if not agent_ids:
         return []
 
-    agents = await Agent.find({"_id": {"$in": agent_ids}}).sort("-created_at").to_list()
+    filters = build_filters(
+        search=search, creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+    )
+    sort_field = resolve_sort(
+        sort_by, sort_dir,
+        allowed_fields={"name", "created_at", "percentage"},
+    )
+
+    agents = await Agent.find(
+        {"_id": {"$in": agent_ids}},
+        filters,
+    ).sort(sort_field).to_list()
 
     result = []
     for agent in agents:

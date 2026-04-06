@@ -57,9 +57,21 @@ async def list_all(
     org_id: str, current_user: CurrentUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_dir: str | None = Query(None),
+    creator: str | None = Query(None),
+    origin: str | None = Query(None),
+    created_from: str | None = Query(None),
+    created_to: str | None = Query(None),
 ):
-    """Liste des agents de l'organisation (pagine)."""
-    result = await list_agents(current_user, org_id, page, page_size)
+    """Liste des agents de l'organisation (pagine, filtrable, triable)."""
+    result = await list_agents(
+        current_user, org_id, page, page_size,
+        search=search, sort_by=sort_by, sort_dir=sort_dir,
+        creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+    )
     return {
         "items": [AgentRead.from_agent(a) for a in result.items],
         "total": result.total,
@@ -70,9 +82,23 @@ async def list_all(
 
 
 @router.get("/shared", response_model=list[AgentRead])
-async def list_shared(org_id: str, current_user: CurrentUser):
+async def list_shared(
+    org_id: str, current_user: CurrentUser,
+    search: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_dir: str | None = Query(None),
+    creator: str | None = Query(None),
+    origin: str | None = Query(None),
+    created_from: str | None = Query(None),
+    created_to: str | None = Query(None),
+):
     """Liste des agents partagés avec mon organisation (lecture seule)."""
-    items = await list_shared_agents(current_user, org_id)
+    items = await list_shared_agents(
+        current_user, org_id,
+        search=search, sort_by=sort_by, sort_dir=sort_dir,
+        creator=creator, origin=origin,
+        created_from=created_from, created_to=created_to,
+    )
     return [AgentRead.from_agent(a, active_schema=s) for a, s in items]
 
 
