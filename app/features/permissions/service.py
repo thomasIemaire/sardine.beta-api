@@ -275,15 +275,28 @@ async def delete_team_permission(
 
 async def set_member_permission(
     user: User, org_id: str,
-    target_user_id: str, team_id: str, folder_id: str,
+    target_user_id: str, team_id: str | None, folder_id: str,
     can_read: bool, can_write: bool,
 ) -> FolderMemberPermission | None:
     """
     Attribue ou modifie les droits individuels d'un membre.
-    Plafonnement : droit individuel ≤ droit de l'équipe sur ce dossier.
+    Si team_id est None, utilise l'équipe racine de l'organisation.
+    Plafonnement : droit individuel ≤ droit de l'équipe sur ce dossier
+    (sauf pour l'owner de l'org qui bypass les regles).
     """
     org = await _get_org(org_id)
-    team = await _get_team(team_id)
+
+    # Résoudre l'équipe : si team_id non fourni, prendre l'équipe racine
+    if team_id:
+        team = await _get_team(team_id)
+    else:
+        team = await Team.find_one(
+            Team.organization_id == PydanticObjectId(org_id),
+            Team.is_root == True,  # noqa: E712
+        )
+        if not team:
+            raise NotFoundError("Équipe racine introuvable")
+
     folder = await _get_folder(folder_id)
 
     if str(team.organization_id) != org_id or str(folder.organization_id) != org_id:
@@ -306,17 +319,20 @@ async def set_member_permission(
         can_read = True
 
     # Plafonnement : droit individuel ≤ droit de l'équipe
-    team_perm = await _get_team_permission_on_folder(team.id, folder.id)
-    if can_write and (not team_perm or not team_perm.can_write):
-        raise ValidationError(
-            "Le droit individuel ne peut pas dépasser le droit de l'équipe "
-            "(l'équipe n'a pas le droit d'écriture sur ce dossier)"
-        )
-    if can_read and (not team_perm or not team_perm.can_read):
-        raise ValidationError(
-            "Le droit individuel ne peut pas dépasser le droit de l'équipe "
-            "(l'équipe n'a aucun droit sur ce dossier)"
-        )
+    # L'owner de l'org bypass cette regle (il a deja tous les droits)
+    is_org_owner = str(org.owner_id) == str(user.id)
+    if not is_org_owner:
+        team_perm = await _get_team_permission_on_folder(team.id, folder.id)
+        if can_write and (not team_perm or not team_perm.can_write):
+            raise ValidationError(
+                "Le droit individuel ne peut pas dépasser le droit de l'équipe "
+                "(l'équipe n'a pas le droit d'écriture sur ce dossier)"
+            )
+        if can_read and (not team_perm or not team_perm.can_read):
+            raise ValidationError(
+                "Le droit individuel ne peut pas dépasser le droit de l'équipe "
+                "(l'équipe n'a aucun droit sur ce dossier)"
+            )
 
     uid = PydanticObjectId(target_user_id)
     tid = team.id
@@ -409,10 +425,22 @@ async def get_effective_right(
     """
     Calcule le droit effectif d'un utilisateur sur un dossier.
     Union de tous les droits (équipes + individuels) → le plus permissif gagne.
+    Le propriétaire de l'organisation a toujours tous les droits.
     Retourne {"can_read": bool, "can_write": bool, "sources": [...]}.
     """
     uid = PydanticObjectId(user_id)
     fid = PydanticObjectId(folder_id)
+
+    # Bypass : le propriétaire de l'organisation a tous les droits
+    folder = await Folder.get(fid)
+    if folder:
+        org = await Organization.get(folder.organization_id)
+        if org and str(org.owner_id) == str(user_id):
+            return {
+                "can_read": True,
+                "can_write": True,
+                "sources": [{"type": "org_owner"}],
+            }
 
     # 1. Trouver toutes les équipes de l'utilisateur
     memberships = await TeamMember.find(
@@ -423,6 +451,20 @@ async def get_effective_right(
     can_read = False
     can_write = False
     sources: list[dict] = []
+
+    # Bypass : tout membre actif de l'organisation a un acces lecture
+    # implicite sur le dossier racine (pour la navigation).
+    # Le contenu sera filtre selon les droits effectifs ailleurs.
+    if folder and folder.is_root and memberships:
+        member_team_ids = {str(m.team_id) for m in memberships}
+        org_team_ids = {
+            str(t.id) for t in await Team.find(
+                Team.organization_id == folder.organization_id,
+            ).to_list()
+        }
+        if member_team_ids & org_team_ids:
+            can_read = True
+            sources.append({"type": "org_member_root"})
 
     for m in memberships:
         # Droit de l'équipe sur ce dossier
@@ -460,7 +502,75 @@ async def get_effective_right(
     if can_write:
         can_read = True
 
+    # Droit de passage : si pas de read direct, verifier si l'utilisateur
+    # a acces a un descendant de ce dossier (navigation implicite).
+    if not can_read and folder:
+        has_descendant = await _has_accessible_descendant(uid, folder)
+        if has_descendant:
+            can_read = True
+            sources.append({"type": "passthrough"})
+
     return {"can_read": can_read, "can_write": can_write, "sources": sources}
+
+
+async def _has_accessible_descendant(
+    user_oid: PydanticObjectId, folder: Folder,
+) -> bool:
+    """
+    Verifie si l'utilisateur a une permission directe sur un descendant
+    du dossier donne (recherche en profondeur).
+    """
+    # BFS sur les descendants
+    queue = [folder.id]
+    visited: set[str] = set()
+
+    while queue:
+        current_ids = queue
+        queue = []
+
+        children = await Folder.find(
+            {"parent_id": {"$in": current_ids}},
+            Folder.deleted_at == None,  # noqa: E711
+        ).to_list()
+
+        if not children:
+            continue
+
+        child_ids = [c.id for c in children]
+
+        # A-t-il une permission d'equipe sur l'un de ces descendants ?
+        memberships = await TeamMember.find(
+            TeamMember.user_id == user_oid,
+            TeamMember.status == Status.ACTIVE,
+        ).to_list()
+        team_ids = [m.team_id for m in memberships]
+
+        if team_ids:
+            tp = await FolderTeamPermission.find_one(
+                {"team_id": {"$in": team_ids},
+                 "folder_id": {"$in": child_ids},
+                 "$or": [{"can_read": True}, {"can_write": True}]}
+            )
+            if tp:
+                return True
+
+            # Ou une permission individuelle
+            mp = await FolderMemberPermission.find_one(
+                {"user_id": user_oid,
+                 "folder_id": {"$in": child_ids},
+                 "$or": [{"can_read": True}, {"can_write": True}]}
+            )
+            if mp:
+                return True
+
+        # Continuer plus profond
+        for c in children:
+            cid = str(c.id)
+            if cid not in visited:
+                visited.add(cid)
+                queue.append(c.id)
+
+    return False
 
 
 async def get_user_effective_rights_all_folders(
@@ -507,15 +617,89 @@ async def check_folder_access(
         raise ForbiddenError("Vous n'avez pas accès à ce dossier")
 
 
+async def get_folder_permissions_breakdown(
+    user: User, org_id: str, folder_id: str,
+) -> dict:
+    """
+    Retourne la decomposition des permissions sur un dossier :
+    - teams : liste des permissions d'equipe
+    - members : liste des permissions individuelles (avec infos user)
+    """
+    org = await _get_org(org_id)
+    folder = await _get_folder(folder_id)
+
+    if str(folder.organization_id) != org_id:
+        raise NotFoundError("Dossier non trouve dans cette organisation")
+
+    # Verification : owner de l'org uniquement
+    if str(org.owner_id) != str(user.id):
+        raise ForbiddenError("Reserve au proprietaire de l'organisation")
+
+    fid = PydanticObjectId(folder_id)
+
+    # 1. Permissions d'equipe sur ce dossier
+    team_perms = await FolderTeamPermission.find(
+        FolderTeamPermission.folder_id == fid,
+    ).to_list()
+
+    teams_data = []
+    for tp in team_perms:
+        team = await Team.get(tp.team_id)
+        if team:
+            teams_data.append({
+                "team_id": str(team.id),
+                "team_name": team.name,
+                "is_root": team.is_root,
+                "can_read": tp.can_read,
+                "can_write": tp.can_write,
+            })
+
+    # 2. Permissions individuelles sur ce dossier
+    member_perms = await FolderMemberPermission.find(
+        FolderMemberPermission.folder_id == fid,
+    ).to_list()
+
+    members_data = []
+    for mp in member_perms:
+        target = await User.get(mp.user_id)
+        team = await Team.get(mp.team_id)
+        if target:
+            members_data.append({
+                "user_id": str(target.id),
+                "first_name": target.first_name,
+                "last_name": target.last_name,
+                "email": target.email,
+                "team_id": str(mp.team_id),
+                "team_name": team.name if team else "?",
+                "can_read": mp.can_read,
+                "can_write": mp.can_write,
+            })
+
+    return {"teams": teams_data, "members": members_data}
+
+
 async def get_accessible_folder_ids(
     user_id: str, org_id: str,
 ) -> dict[str, dict]:
     """
     Retourne un dict folder_id → {"can_read": bool, "can_write": bool}
     pour tous les dossiers accessibles de l'org.
+    Le propriétaire de l'organisation a accès à tous les dossiers.
     """
     uid = PydanticObjectId(user_id)
     oid = PydanticObjectId(org_id)
+
+    # Bypass : propriétaire de l'org → tous les dossiers
+    org = await Organization.get(oid)
+    if org and str(org.owner_id) == str(user_id):
+        all_folders = await Folder.find(
+            Folder.organization_id == oid,
+            Folder.deleted_at == None,  # noqa: E711
+        ).to_list()
+        return {
+            str(f.id): {"can_read": True, "can_write": True}
+            for f in all_folders
+        }
 
     # Toutes les équipes de l'utilisateur
     memberships = await TeamMember.find(
@@ -566,8 +750,26 @@ async def get_accessible_folder_ids(
         Folder.deleted_at == None,  # noqa: E711
     ).to_list()
     org_folder_ids = {str(f.id) for f in org_folders}
+    folder_map = {str(f.id): f for f in org_folders}
 
-    return {fid: r for fid, r in folder_rights.items() if fid in org_folder_ids}
+    folder_rights = {fid: r for fid, r in folder_rights.items() if fid in org_folder_ids}
+
+    # Droit de passage : ajouter read implicite sur tous les ancetres
+    # des dossiers accessibles (pour permettre la navigation).
+    # Ces ancetres ont can_read=true et un flag implicit=true.
+    for fid in list(folder_rights.keys()):
+        current = folder_map.get(fid)
+        while current and current.parent_id:
+            parent_id = str(current.parent_id)
+            if parent_id not in folder_rights:
+                folder_rights[parent_id] = {
+                    "can_read": True,
+                    "can_write": False,
+                    "implicit": True,
+                }
+            current = folder_map.get(parent_id)
+
+    return folder_rights
 
 
 # ─── US-PERM-08 : Matrice droits d'une équipe ───────────────────

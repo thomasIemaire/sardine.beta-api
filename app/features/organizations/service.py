@@ -448,7 +448,8 @@ async def invite_user_to_organization(
 async def _handle_org_invitation(notif, action_key: str) -> str:
     """
     Handler métier pour les invitations d'organisation.
-    Si accepté : ajoute l'utilisateur à l'équipe racine de l'organisation.
+    Si accepté : ajoute l'utilisateur à l'équipe racine de l'organisation
+    et envoie une notification de confirmation.
     """
     if action_key == "accept":
         org_id = notif.action_payload.get("organization_id")
@@ -477,6 +478,35 @@ async def _handle_org_invitation(notif, action_key: str) -> str:
             )
             await membership.insert()
 
+        # Notification de confirmation au nouveau membre
+        from app.features.notifications.service import create_info_notification
+        await create_info_notification(
+            recipient_user_id=str(notif.recipient_user_id),
+            title="Bienvenue dans une nouvelle organisation",
+            message=f"Vous avez rejoint l'organisation « {org.name} ».",
+            organization_id=str(org.id),
+        )
+
+        # Notification aux propriétaires de l'org
+        from app.core.membership import get_org_owner_user_ids
+        from app.features.auth.models import User as UserModel
+
+        new_member = await UserModel.get(notif.recipient_user_id)
+        member_label = (
+            f"{new_member.first_name} {new_member.last_name}".strip()
+            if new_member else "Un nouvel utilisateur"
+        )
+        owner_ids = await get_org_owner_user_ids(org.id)
+        for owner_id in owner_ids:
+            if owner_id == str(notif.recipient_user_id):
+                continue
+            await create_info_notification(
+                recipient_user_id=owner_id,
+                title="Nouveau membre",
+                message=f"{member_label} a rejoint l'organisation « {org.name} ».",
+                organization_id=str(org.id),
+            )
+
         return NotificationActionStatus.ACCEPTED
 
     return NotificationActionStatus.REJECTED
@@ -495,7 +525,9 @@ async def bulk_invite_members(
 ) -> list[dict]:
     """
     Invitation en masse : pour chaque entrée (email + password),
-    crée le compte s'il n'existe pas, puis l'ajoute à l'équipe racine.
+    crée le compte s'il n'existe pas, puis envoie une notification
+    d'invitation (Accepter / Refuser). L'utilisateur ne sera ajouté
+    à l'organisation qu'après acceptation.
     """
     org = await Organization.get(PydanticObjectId(org_id))
     if not org:
@@ -516,14 +548,14 @@ async def bulk_invite_members(
         password = entry.password
 
         try:
-            # Valider le mot de passe
-            validate_password(password)
-
             # Chercher si l'utilisateur existe déjà
             user = await User.find_one(User.email == email)
-            status_label = "existing"
+            account_created = False
 
             if not user:
+                # Compte inexistant : valider le mot de passe avant création
+                validate_password(password)
+
                 # Créer le compte
                 user = User(
                     email=email,
@@ -543,39 +575,46 @@ async def bulk_invite_members(
                 # Créer l'organisation privée (comme à l'inscription)
                 await create_private_organization(user)
 
-                status_label = "created"
+                account_created = True
 
-            # Vérifier s'il est déjà membre de l'équipe racine
+            # Vérifier s'il est déjà membre actif de l'équipe racine
             existing_member = await TeamMember.find_one(
                 TeamMember.team_id == root_team.id,
                 TeamMember.user_id == user.id,
+                TeamMember.status == Status.ACTIVE,
             )
             if existing_member:
-                if existing_member.status == Status.ACTIVE:
-                    results.append({
-                        "email": email,
-                        "status": "existing",
-                        "detail": "Déjà membre de l'organisation",
-                    })
-                    continue
-                # Réactiver si inactif
-                existing_member.status = Status.ACTIVE
-                await existing_member.save()
-            else:
-                # Ajouter à l'équipe racine
-                membership = TeamMember(
-                    team_id=root_team.id,
-                    user_id=user.id,
-                    role=TeamMemberRole.MEMBER,
-                    status=Status.ACTIVE,
-                )
-                await membership.insert()
+                results.append({
+                    "email": email,
+                    "status": "existing",
+                    "detail": "Déjà membre de l'organisation",
+                })
+                continue
+
+            # Envoyer la notification d'invitation (Accepter / Refuser)
+            await create_action_notification(
+                recipient_user_id=str(user.id),
+                title="Invitation à rejoindre une organisation",
+                message=(
+                    f"{owner.first_name} {owner.last_name} vous invite à rejoindre "
+                    f"l'organisation « {org.name} »."
+                ),
+                actions=[
+                    {"key": "accept", "label": "Accepter"},
+                    {"key": "reject", "label": "Refuser"},
+                ],
+                action_payload={
+                    "action_type": "org_invitation",
+                    "organization_id": str(org.id),
+                    "invited_by": str(owner.id),
+                },
+            )
 
             results.append({
                 "email": email,
-                "status": status_label,
-                "detail": "Compte créé et ajouté" if status_label == "created"
-                          else "Utilisateur existant ajouté",
+                "status": "invited",
+                "detail": "Compte créé, invitation envoyée" if account_created
+                          else "Invitation envoyée",
             })
 
         except Exception as e:
@@ -589,7 +628,7 @@ async def bulk_invite_members(
     await log_action(
         user_id=owner.id,
         action="BULK_INVITE",
-        details=f"{len(members)} membre(s) invité(s) dans « {org.name} »",
+        details=f"{len(members)} invitation(s) envoyée(s) dans « {org.name} »",
         organization_id=org.id,
     )
 

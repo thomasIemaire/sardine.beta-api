@@ -6,6 +6,7 @@ et l'appartenance à l'organisation.
 
 from fastapi import APIRouter, Query
 
+from app.core.users_lookup import get_user_names_map
 from app.features.auth.dependencies import CurrentUser
 from app.features.auth.schemas import MessageResponse
 from app.features.flows.schemas import (
@@ -49,7 +50,11 @@ async def create(org_id: str, payload: FlowCreate, current_user: CurrentUser):
         current_user, org_id, payload.name, payload.flow_data,
         description=payload.description,
     )
-    return FlowRead.from_flow(flow, active_data=version.flow_data)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, active_data=version.flow_data,
+        creator_name=names.get(str(flow.created_by)),
+    )
 
 
 @router.get("/")
@@ -74,8 +79,12 @@ async def list_all(
         created_from=created_from, created_to=created_to,
         status=status,
     )
+    names = await get_user_names_map([f.created_by for f in result.items])
     return {
-        "items": [FlowRead.from_flow(f) for f in result.items],
+        "items": [
+            FlowRead.from_flow(f, creator_name=names.get(str(f.created_by)))
+            for f in result.items
+        ],
         "total": result.total,
         "page": result.page,
         "page_size": result.page_size,
@@ -103,7 +112,11 @@ async def list_shared(
         created_from=created_from, created_to=created_to,
         status=status,
     )
-    return [FlowRead.from_flow(f) for f in flows]
+    names = await get_user_names_map([f.created_by for f in flows])
+    return [
+        FlowRead.from_flow(f, creator_name=names.get(str(f.created_by)))
+        for f in flows
+    ]
 
 
 @router.get("/shared/{flow_id}", response_model=FlowRead)
@@ -112,14 +125,22 @@ async def get_shared(org_id: str, flow_id: str, current_user: CurrentUser):
     flow, active_data = await get_shared_flow(
         current_user, org_id, flow_id,
     )
-    return FlowRead.from_flow(flow, active_data=active_data)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, active_data=active_data,
+        creator_name=names.get(str(flow.created_by)),
+    )
 
 
 @router.get("/{flow_id}", response_model=FlowRead)
 async def get_one(org_id: str, flow_id: str, current_user: CurrentUser):
     """Détail d'un flow avec les données de la version active."""
     flow, active_data = await get_flow(current_user, org_id, flow_id)
-    return FlowRead.from_flow(flow, active_data=active_data)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, active_data=active_data,
+        creator_name=names.get(str(flow.created_by)),
+    )
 
 
 @router.patch("/{flow_id}", response_model=FlowRead)
@@ -133,7 +154,10 @@ async def update(
         description=payload.description,
         status=payload.status,
     )
-    return FlowRead.from_flow(flow)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, creator_name=names.get(str(flow.created_by)),
+    )
 
 
 @router.delete("/{flow_id}", response_model=MessageResponse)
@@ -161,7 +185,10 @@ async def create_ver(
         current_user, org_id, flow_id,
         payload.flow_data, payload.parent_version_id,
     )
-    return FlowVersionRead.from_version(version)
+    names = await get_user_names_map([version.created_by])
+    return FlowVersionRead.from_version(
+        version, creator_name=names.get(str(version.created_by)),
+    )
 
 
 @router.get("/{flow_id}/versions", response_model=list[FlowVersionRead])
@@ -170,7 +197,11 @@ async def list_ver(
 ):
     """Liste toutes les versions d'un flow (arbre complet)."""
     versions = await list_versions(current_user, org_id, flow_id)
-    return [FlowVersionRead.from_version(v) for v in versions]
+    names = await get_user_names_map([v.created_by for v in versions])
+    return [
+        FlowVersionRead.from_version(v, creator_name=names.get(str(v.created_by)))
+        for v in versions
+    ]
 
 
 @router.get(
@@ -181,7 +212,10 @@ async def get_ver(
 ):
     """Détail d'une version spécifique."""
     version = await get_version(current_user, org_id, flow_id, version_id)
-    return FlowVersionRead.from_version(version)
+    names = await get_user_names_map([version.created_by])
+    return FlowVersionRead.from_version(
+        version, creator_name=names.get(str(version.created_by)),
+    )
 
 
 @router.patch("/{flow_id}/active-version", response_model=FlowRead)
@@ -193,7 +227,10 @@ async def switch_version(
     flow = await switch_active_version(
         current_user, org_id, flow_id, payload.version_id,
     )
-    return FlowRead.from_flow(flow)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, creator_name=names.get(str(flow.created_by)),
+    )
 
 
 @router.get(
@@ -210,7 +247,11 @@ async def version_history(
     history = await get_version_history(
         current_user, org_id, flow_id, version_id,
     )
-    return [FlowVersionRead.from_version(v) for v in history]
+    names = await get_user_names_map([v.created_by for v in history])
+    return [
+        FlowVersionRead.from_version(v, creator_name=names.get(str(v.created_by)))
+        for v in history
+    ]
 
 
 # ─── Partage ─────────────────────────────────────────────────────
@@ -256,4 +297,8 @@ async def fork(org_id: str, flow_id: str, current_user: CurrentUser):
     Crée une copie liée à l'original par les versions.
     """
     flow, version = await fork_flow(current_user, org_id, flow_id)
-    return FlowRead.from_flow(flow, active_data=version.flow_data)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, active_data=version.flow_data,
+        creator_name=names.get(str(flow.created_by)),
+    )

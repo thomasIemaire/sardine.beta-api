@@ -21,7 +21,9 @@ from app.features.folders.service import (
     empty_trash,
     get_breadcrumb,
     get_folder_contents,
+    get_root_folder,
     get_trash_contents,
+    get_trash_folder,
     move_folder,
     rename_folder,
     restore_folder,
@@ -29,6 +31,22 @@ from app.features.folders.service import (
 )
 
 router = APIRouter(prefix="/organizations/{org_id}/folders", tags=["Folders"])
+
+
+# ─── Dossiers systeme ────────────────────────────────────────────
+
+@router.get("/root", response_model=FolderRead)
+async def root(org_id: str, current_user: CurrentUser):
+    """Retourne le dossier racine de l'organisation."""
+    folder = await get_root_folder(org_id)
+    return FolderRead.from_folder(folder)
+
+
+@router.get("/trash-folder", response_model=FolderRead)
+async def trash_folder(org_id: str, current_user: CurrentUser):
+    """Retourne le dossier corbeille de l'organisation."""
+    folder = await get_trash_folder(org_id)
+    return FolderRead.from_folder(folder)
 
 
 # ─── CRUD dossiers ────────────────────────────────────────────────
@@ -49,8 +67,10 @@ async def rename(folder_id: str, payload: FolderRename, current_user: CurrentUse
 
 @router.get("/{folder_id}/contents", response_model=list[FolderRead])
 async def contents(org_id: str, folder_id: str, current_user: CurrentUser):
-    """Lister les sous-dossiers d'un dossier."""
-    folders = await get_folder_contents(org_id, folder_id)
+    """Lister les sous-dossiers d'un dossier (filtres selon les droits)."""
+    folders = await get_folder_contents(
+        org_id, folder_id, user_id=str(current_user.id),
+    )
     return [FolderRead.from_folder(f) for f in folders]
 
 

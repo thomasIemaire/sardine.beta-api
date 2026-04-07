@@ -24,6 +24,28 @@ logger = logging.getLogger(__name__)
 RETENTION_DAYS = 30
 
 
+async def get_root_folder(org_id: str) -> Folder:
+    """Retourne le dossier racine de l'organisation."""
+    folder = await Folder.find_one(
+        Folder.organization_id == PydanticObjectId(org_id),
+        Folder.is_root == True,  # noqa: E712
+    )
+    if not folder:
+        raise NotFoundError("Dossier racine introuvable")
+    return folder
+
+
+async def get_trash_folder(org_id: str) -> Folder:
+    """Retourne le dossier corbeille de l'organisation."""
+    folder = await Folder.find_one(
+        Folder.organization_id == PydanticObjectId(org_id),
+        Folder.is_trash == True,  # noqa: E712
+    )
+    if not folder:
+        raise NotFoundError("Dossier corbeille introuvable")
+    return folder
+
+
 async def create_folder(org_id: str, payload: FolderCreate) -> Folder:
     """
     Créer un sous-dossier.
@@ -83,16 +105,85 @@ async def rename_folder(folder_id: str, payload: FolderRename) -> Folder:
     return folder
 
 
-async def get_folder_contents(org_id: str, folder_id: str) -> list[Folder]:
+async def get_folder_contents(
+    org_id: str, folder_id: str, user_id: str | None = None,
+) -> list[Folder]:
     """
     Liste les sous-dossiers d'un dossier donné.
     Exclut les éléments supprimés (dans la corbeille).
+
+    Si user_id est fourni :
+      - Si folder_id est la racine : retourne les "dossiers de plus haut niveau
+        accessibles" (point d'entree virtuel), peu importe leur emplacement
+        reel dans l'arborescence.
+      - Sinon : retourne les enfants directs filtres selon les droits.
     """
-    return await Folder.find(
+    folder = await Folder.get(PydanticObjectId(folder_id))
+    if not folder:
+        return []
+
+    # Cas standard : pas de filtrage
+    if user_id is None:
+        return await Folder.find(
+            Folder.organization_id == PydanticObjectId(org_id),
+            Folder.parent_id == PydanticObjectId(folder_id),
+            Folder.deleted_at == None,  # noqa: E711
+        ).sort("name").to_list()
+
+    from app.features.organizations.models import Organization
+    from app.features.permissions.service import get_accessible_folder_ids
+
+    accessible = await get_accessible_folder_ids(user_id, org_id)
+
+    # Owner de l'org : toujours voir l'arborescence reelle
+    org = await Organization.get(PydanticObjectId(org_id))
+    is_org_owner = org and str(org.owner_id) == str(user_id)
+
+    if folder.is_root and not is_org_owner:
+        # Vue virtuelle : retourner les dossiers de plus haut niveau
+        # auxquels l'utilisateur a un acces direct (non implicite).
+        direct_ids = {
+            fid for fid, r in accessible.items()
+            if not r.get("implicit")
+        }
+        if not direct_ids:
+            return []
+
+        all_folders = await Folder.find(
+            Folder.organization_id == PydanticObjectId(org_id),
+            Folder.deleted_at == None,  # noqa: E711
+        ).to_list()
+        folder_map = {str(f.id): f for f in all_folders}
+
+        # Un dossier est "top-level" si aucun de ses ancetres n'est
+        # aussi accessible directement.
+        top_level: list[Folder] = []
+        for fid in direct_ids:
+            f = folder_map.get(fid)
+            if not f:
+                continue
+            # Verifier les ancetres
+            current = f
+            has_accessible_ancestor = False
+            while current and current.parent_id:
+                parent_id = str(current.parent_id)
+                if parent_id in direct_ids:
+                    has_accessible_ancestor = True
+                    break
+                current = folder_map.get(parent_id)
+            if not has_accessible_ancestor:
+                top_level.append(f)
+
+        top_level.sort(key=lambda x: x.name)
+        return top_level
+
+    # Cas standard : enfants directs filtres
+    folders = await Folder.find(
         Folder.organization_id == PydanticObjectId(org_id),
         Folder.parent_id == PydanticObjectId(folder_id),
         Folder.deleted_at == None,  # noqa: E711
     ).sort("name").to_list()
+    return [f for f in folders if str(f.id) in accessible]
 
 
 async def get_breadcrumb(folder_id: str) -> list[dict]:

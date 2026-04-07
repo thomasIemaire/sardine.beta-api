@@ -11,6 +11,7 @@ from app.features.permissions.schemas import (
     CascadeImpact,
     EffectiveRight,
     FolderAccessUser,
+    FolderPermissionsBreakdown,
     MemberPermissionDetail,
     MemberPermissionRead,
     MemberPermissionSet,
@@ -21,6 +22,7 @@ from app.features.permissions.service import (
     delete_team_permission,
     get_effective_right,
     get_folder_access_list,
+    get_folder_permissions_breakdown,
     get_member_permissions_detail,
     get_team_permissions_matrix,
     get_user_effective_rights_all_folders,
@@ -165,6 +167,115 @@ async def folder_access(
     """Liste des utilisateurs ayant accès à un dossier avec leur droit effectif."""
     users = await get_folder_access_list(current_user, org_id, folder_id)
     return [FolderAccessUser(**u) for u in users]
+
+
+@router.get(
+    "/folders/{folder_id}/breakdown",
+    response_model=FolderPermissionsBreakdown,
+)
+async def folder_permissions_breakdown(
+    org_id: str, folder_id: str, current_user: CurrentUser,
+):
+    """
+    Decomposition des permissions sur un dossier :
+    - teams : equipes ayant une permission directe
+    - members : permissions individuelles existantes
+    Reserve au proprietaire de l'organisation.
+    """
+    return await get_folder_permissions_breakdown(
+        current_user, org_id, folder_id,
+    )
+
+
+@router.get("/debug/me")
+async def debug_my_permissions(org_id: str, current_user: CurrentUser):
+    """
+    Endpoint de debug : retourne tout ce qu'on sait sur les droits
+    de l'utilisateur courant dans cette organisation.
+    """
+    from beanie import PydanticObjectId
+
+    from app.features.folders.models import Folder
+    from app.features.organizations.models import Organization
+    from app.features.permissions.models import (
+        FolderMemberPermission,
+        FolderTeamPermission,
+    )
+    from app.features.permissions.service import get_accessible_folder_ids
+    from app.features.teams.models import Team, TeamMember
+
+    uid = current_user.id
+    oid = PydanticObjectId(org_id)
+
+    org = await Organization.get(oid)
+    is_owner = org and str(org.owner_id) == str(uid)
+
+    all_memberships = await TeamMember.find(TeamMember.user_id == uid).to_list()
+    memberships_data = []
+    for m in all_memberships:
+        team = await Team.get(m.team_id)
+        memberships_data.append({
+            "team_id": str(m.team_id),
+            "team_name": team.name if team else "?",
+            "team_org_id": str(team.organization_id) if team else None,
+            "in_this_org": str(team.organization_id) == org_id if team else False,
+            "role": m.role,
+            "status": m.status,
+        })
+
+    active_memberships = [m for m in all_memberships if m.status == 1]
+    active_team_ids = [m.team_id for m in active_memberships]
+
+    team_perms_raw = await FolderTeamPermission.find(
+        {"team_id": {"$in": active_team_ids}},
+    ).to_list() if active_team_ids else []
+
+    team_perms_data = []
+    for tp in team_perms_raw:
+        folder = await Folder.get(tp.folder_id)
+        team = await Team.get(tp.team_id)
+        team_perms_data.append({
+            "team_id": str(tp.team_id),
+            "team_name": team.name if team else "?",
+            "folder_id": str(tp.folder_id),
+            "folder_name": folder.name if folder else "?",
+            "folder_org_id": str(folder.organization_id) if folder else None,
+            "in_this_org": str(folder.organization_id) == org_id if folder else False,
+            "can_read": tp.can_read,
+            "can_write": tp.can_write,
+        })
+
+    member_perms_raw = await FolderMemberPermission.find(
+        FolderMemberPermission.user_id == uid,
+    ).to_list()
+
+    member_perms_data = []
+    for mp in member_perms_raw:
+        folder = await Folder.get(mp.folder_id)
+        team = await Team.get(mp.team_id)
+        member_perms_data.append({
+            "team_id": str(mp.team_id),
+            "team_name": team.name if team else "?",
+            "folder_id": str(mp.folder_id),
+            "folder_name": folder.name if folder else "?",
+            "folder_org_id": str(folder.organization_id) if folder else None,
+            "can_read": mp.can_read,
+            "can_write": mp.can_write,
+        })
+
+    accessible = await get_accessible_folder_ids(str(uid), org_id)
+
+    return {
+        "user_id": str(uid),
+        "user_email": current_user.email,
+        "org_id": org_id,
+        "is_org_owner": is_owner,
+        "memberships": memberships_data,
+        "active_team_ids": [str(t) for t in active_team_ids],
+        "team_perms_found": team_perms_data,
+        "member_perms_found": member_perms_data,
+        "accessible_folders": accessible,
+    }
 
 
 # ─── US-PERM-11 : Preview impact cascade ─────────────────────────

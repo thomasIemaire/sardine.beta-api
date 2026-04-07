@@ -19,10 +19,11 @@ class ApiKeyRead(BaseModel):
     status: int
     status_label: str
     created_by: str
+    created_by_name: str | None = None
     created_at: datetime
 
     @classmethod
-    def from_model(cls, key) -> "ApiKeyRead":
+    def from_model(cls, key, creator_name: str | None = None) -> "ApiKeyRead":
         return cls(
             id=str(key.id),
             name=key.name,
@@ -30,6 +31,7 @@ class ApiKeyRead(BaseModel):
             status=key.status,
             status_label="Active" if key.status == 1 else "Révoquée",
             created_by=str(key.created_by),
+            created_by_name=creator_name,
             created_at=key.created_at,
         )
 
@@ -39,7 +41,9 @@ class ApiKeyCreated(ApiKeyRead):
     token: str
 
     @classmethod
-    def from_model(cls, key, token: str) -> "ApiKeyCreated":
+    def from_model(
+        cls, key, token: str, creator_name: str | None = None,
+    ) -> "ApiKeyCreated":
         return cls(
             id=str(key.id),
             name=key.name,
@@ -47,6 +51,7 @@ class ApiKeyCreated(ApiKeyRead):
             status=key.status,
             status_label="Active" if key.status == 1 else "Révoquée",
             created_by=str(key.created_by),
+            created_by_name=creator_name,
             created_at=key.created_at,
             token=token,
         )

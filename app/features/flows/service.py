@@ -294,7 +294,13 @@ async def share_flow(
     await check_org_membership(user, org_id)
     flow = await _get_flow_for_org(flow_id, org_id)
 
+    from app.core.membership import get_org_owner_user_ids
+    from app.features.notifications.service import create_info_notification
     from app.features.organizations.models import Organization
+
+    # Org source (pour le message)
+    source_org = await Organization.get(PydanticObjectId(org_id))
+    source_org_name = source_org.name if source_org else "une organisation"
 
     created: list[FlowShare] = []
     for target_org_id in target_org_ids:
@@ -319,6 +325,19 @@ async def share_flow(
         )
         await share.insert()
         created.append(share)
+
+        # Notifier tous les propriétaires de l'org cible
+        owner_ids = await get_org_owner_user_ids(target_org.id)
+        for owner_id in owner_ids:
+            await create_info_notification(
+                recipient_user_id=owner_id,
+                title="Nouveau flow partagé",
+                message=(
+                    f"L'organisation « {source_org_name} » a partagé "
+                    f"le flow « {flow.name} » avec votre organisation."
+                ),
+                organization_id=str(target_org.id),
+            )
 
     return created
 

@@ -18,10 +18,13 @@ class TeamPermissionSet(BaseModel):
 
 
 class MemberPermissionSet(BaseModel):
-    """Attribution / modification des droits individuels d'un membre."""
+    """
+    Attribution / modification des droits individuels d'un membre.
+    Si team_id est omis, l'équipe racine de l'organisation est utilisée.
+    """
 
     user_id: str
-    team_id: str
+    team_id: str | None = None
     folder_id: str
     can_read: bool = False
     can_write: bool = False
@@ -109,6 +112,33 @@ class MemberPermissionDetail(BaseModel):
     team_can_write: bool
     individual_can_read: bool | None = None
     individual_can_write: bool | None = None
+
+
+class FolderTeamPermissionEntry(BaseModel):
+    """Permission d'une équipe sur un dossier (vue admin)."""
+    team_id: str
+    team_name: str
+    is_root: bool
+    can_read: bool
+    can_write: bool
+
+
+class FolderMemberPermissionEntry(BaseModel):
+    """Permission individuelle d'un membre sur un dossier (vue admin)."""
+    user_id: str
+    first_name: str
+    last_name: str
+    email: str
+    team_id: str
+    team_name: str
+    can_read: bool
+    can_write: bool
+
+
+class FolderPermissionsBreakdown(BaseModel):
+    """Décomposition des permissions sur un dossier : équipes + individuels."""
+    teams: list[FolderTeamPermissionEntry]
+    members: list[FolderMemberPermissionEntry]
 
 
 class CascadeImpact(BaseModel):

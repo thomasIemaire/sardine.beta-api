@@ -34,6 +34,7 @@ from app.features.agents.service import (
     unshare_agent,
     update_agent,
 )
+from app.core.users_lookup import get_user_names_map
 from app.features.auth.dependencies import CurrentUser
 from app.features.auth.schemas import MessageResponse
 
@@ -49,7 +50,11 @@ async def create(org_id: str, payload: AgentCreate, current_user: CurrentUser):
         current_user, org_id, payload.name, payload.schema_data,
         description=payload.description,
     )
-    return AgentRead.from_agent(agent, active_schema=version.schema_data)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(
+        agent, active_schema=version.schema_data,
+        creator_name=names.get(str(agent.created_by)),
+    )
 
 
 @router.get("/")
@@ -72,8 +77,12 @@ async def list_all(
         creator=creator, origin=origin,
         created_from=created_from, created_to=created_to,
     )
+    names = await get_user_names_map([a.created_by for a in result.items])
     return {
-        "items": [AgentRead.from_agent(a) for a in result.items],
+        "items": [
+            AgentRead.from_agent(a, creator_name=names.get(str(a.created_by)))
+            for a in result.items
+        ],
         "total": result.total,
         "page": result.page,
         "page_size": result.page_size,
@@ -99,7 +108,14 @@ async def list_shared(
         creator=creator, origin=origin,
         created_from=created_from, created_to=created_to,
     )
-    return [AgentRead.from_agent(a, active_schema=s) for a, s in items]
+    names = await get_user_names_map([a.created_by for a, _ in items])
+    return [
+        AgentRead.from_agent(
+            a, active_schema=s,
+            creator_name=names.get(str(a.created_by)),
+        )
+        for a, s in items
+    ]
 
 
 @router.get("/shared/{agent_id}", response_model=AgentRead)
@@ -108,14 +124,22 @@ async def get_shared(org_id: str, agent_id: str, current_user: CurrentUser):
     agent, active_schema = await get_shared_agent(
         current_user, org_id, agent_id,
     )
-    return AgentRead.from_agent(agent, active_schema=active_schema)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(
+        agent, active_schema=active_schema,
+        creator_name=names.get(str(agent.created_by)),
+    )
 
 
 @router.get("/{agent_id}", response_model=AgentRead)
 async def get_one(org_id: str, agent_id: str, current_user: CurrentUser):
     """Détail d'un agent avec le schéma de la version active."""
     agent, active_schema = await get_agent(current_user, org_id, agent_id)
-    return AgentRead.from_agent(agent, active_schema=active_schema)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(
+        agent, active_schema=active_schema,
+        creator_name=names.get(str(agent.created_by)),
+    )
 
 
 @router.patch("/{agent_id}", response_model=AgentRead)
@@ -127,7 +151,10 @@ async def update(
         current_user, org_id, agent_id,
         name=payload.name, description=payload.description,
     )
-    return AgentRead.from_agent(agent)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(
+        agent, creator_name=names.get(str(agent.created_by)),
+    )
 
 
 @router.delete("/{agent_id}", response_model=MessageResponse)
@@ -155,7 +182,10 @@ async def create_ver(
         current_user, org_id, agent_id,
         payload.schema_data, payload.parent_version_id,
     )
-    return AgentVersionRead.from_version(version)
+    names = await get_user_names_map([version.created_by])
+    return AgentVersionRead.from_version(
+        version, creator_name=names.get(str(version.created_by)),
+    )
 
 
 @router.get("/{agent_id}/versions", response_model=list[AgentVersionRead])
@@ -164,7 +194,11 @@ async def list_ver(
 ):
     """Liste toutes les versions d'un agent (arbre complet)."""
     versions = await list_versions(current_user, org_id, agent_id)
-    return [AgentVersionRead.from_version(v) for v in versions]
+    names = await get_user_names_map([v.created_by for v in versions])
+    return [
+        AgentVersionRead.from_version(v, creator_name=names.get(str(v.created_by)))
+        for v in versions
+    ]
 
 
 @router.get(
@@ -175,7 +209,10 @@ async def get_ver(
 ):
     """Détail d'une version spécifique."""
     version = await get_version(current_user, org_id, agent_id, version_id)
-    return AgentVersionRead.from_version(version)
+    names = await get_user_names_map([version.created_by])
+    return AgentVersionRead.from_version(
+        version, creator_name=names.get(str(version.created_by)),
+    )
 
 
 @router.patch("/{agent_id}/active-version", response_model=AgentRead)
@@ -187,7 +224,10 @@ async def switch_version(
     agent = await switch_active_version(
         current_user, org_id, agent_id, payload.version_id,
     )
-    return AgentRead.from_agent(agent)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(
+        agent, creator_name=names.get(str(agent.created_by)),
+    )
 
 
 @router.get(
@@ -204,7 +244,11 @@ async def version_history(
     history = await get_version_history(
         current_user, org_id, agent_id, version_id,
     )
-    return [AgentVersionRead.from_version(v) for v in history]
+    names = await get_user_names_map([v.created_by for v in history])
+    return [
+        AgentVersionRead.from_version(v, creator_name=names.get(str(v.created_by)))
+        for v in history
+    ]
 
 
 # ─── Partage ─────────────────────────────────────────────────────
@@ -250,4 +294,8 @@ async def fork(org_id: str, agent_id: str, current_user: CurrentUser):
     Crée une copie liée à l'original par les versions.
     """
     agent, version = await fork_agent(current_user, org_id, agent_id)
-    return AgentRead.from_agent(agent, active_schema=version.schema_data)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(
+        agent, active_schema=version.schema_data,
+        creator_name=names.get(str(agent.created_by)),
+    )

@@ -58,10 +58,13 @@ class FlowVersionRead(BaseModel):
     flow_data: dict
     parent_version_id: str | None
     created_by: str
+    created_by_name: str | None = None
     created_at: datetime
 
     @classmethod
-    def from_version(cls, version) -> "FlowVersionRead":
+    def from_version(
+        cls, version, creator_name: str | None = None,
+    ) -> "FlowVersionRead":
         return cls(
             id=str(version.id),
             flow_id=str(version.flow_id),
@@ -70,6 +73,7 @@ class FlowVersionRead(BaseModel):
                 str(version.parent_version_id) if version.parent_version_id else None
             ),
             created_by=str(version.created_by),
+            created_by_name=creator_name,
             created_at=version.created_at,
         )
 
@@ -88,11 +92,13 @@ class FlowRead(BaseModel):
     forked_from_id: str | None = None
     forked_from_version_id: str | None = None
     created_by: str
+    created_by_name: str | None = None
     created_at: datetime
 
     @classmethod
     def from_flow(
         cls, flow, active_data: dict | None = None,
+        creator_name: str | None = None,
     ) -> "FlowRead":
         return cls(
             id=str(flow.id),
@@ -113,6 +119,7 @@ class FlowRead(BaseModel):
                 if flow.forked_from_version_id else None
             ),
             created_by=str(flow.created_by),
+            created_by_name=creator_name,
             created_at=flow.created_at,
         )
 

@@ -55,10 +55,13 @@ class AgentVersionRead(BaseModel):
     schema_data: dict
     parent_version_id: str | None
     created_by: str
+    created_by_name: str | None = None
     created_at: datetime
 
     @classmethod
-    def from_version(cls, version) -> "AgentVersionRead":
+    def from_version(
+        cls, version, creator_name: str | None = None,
+    ) -> "AgentVersionRead":
         return cls(
             id=str(version.id),
             agent_id=str(version.agent_id),
@@ -67,6 +70,7 @@ class AgentVersionRead(BaseModel):
                 str(version.parent_version_id) if version.parent_version_id else None
             ),
             created_by=str(version.created_by),
+            created_by_name=creator_name,
             created_at=version.created_at,
         )
 
@@ -83,11 +87,13 @@ class AgentRead(BaseModel):
     forked_from_id: str | None = None
     forked_from_version_id: str | None = None
     created_by: str
+    created_by_name: str | None = None
     created_at: datetime
 
     @classmethod
     def from_agent(
         cls, agent, active_schema: dict | None = None,
+        creator_name: str | None = None,
     ) -> "AgentRead":
         return cls(
             id=str(agent.id),
@@ -106,6 +112,7 @@ class AgentRead(BaseModel):
                 if agent.forked_from_version_id else None
             ),
             created_by=str(agent.created_by),
+            created_by_name=creator_name,
             created_at=agent.created_at,
         )
 

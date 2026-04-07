@@ -4,6 +4,7 @@ Endpoints de gestion des clés API d'une organisation.
 
 from fastapi import APIRouter, Query, status
 
+from app.core.users_lookup import get_user_names_map
 from app.features.api_keys.schemas import ApiKeyCreate, ApiKeyCreated, ApiKeyRead
 from app.features.api_keys.service import (
     create_api_key,
@@ -23,7 +24,11 @@ router = APIRouter(
 async def create_key(org_id: str, payload: ApiKeyCreate, current_user: CurrentUser):
     """Crée une nouvelle clé API. Le token n'est retourné qu'une seule fois."""
     api_key, token = await create_api_key(current_user, org_id, payload)
-    return ApiKeyCreated.from_model(api_key, token=token)
+    names = await get_user_names_map([api_key.created_by])
+    return ApiKeyCreated.from_model(
+        api_key, token=token,
+        creator_name=names.get(str(api_key.created_by)),
+    )
 
 
 @router.get("/")
@@ -35,8 +40,12 @@ async def list_keys(
 ):
     """Liste paginée des clés API de l'organisation."""
     result = await list_api_keys(current_user, org_id, page=page, page_size=page_size)
+    names = await get_user_names_map([k.created_by for k in result.items])
     return {
-        "items": [ApiKeyRead.from_model(k) for k in result.items],
+        "items": [
+            ApiKeyRead.from_model(k, creator_name=names.get(str(k.created_by)))
+            for k in result.items
+        ],
         "total": result.total,
         "page": result.page,
         "page_size": result.page_size,
@@ -48,7 +57,10 @@ async def list_keys(
 async def revoke_key(org_id: str, key_id: str, current_user: CurrentUser):
     """Révoque une clé API active. Action irréversible."""
     api_key = await revoke_api_key(current_user, org_id, key_id)
-    return ApiKeyRead.from_model(api_key)
+    names = await get_user_names_map([api_key.created_by])
+    return ApiKeyRead.from_model(
+        api_key, creator_name=names.get(str(api_key.created_by)),
+    )
 
 
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)

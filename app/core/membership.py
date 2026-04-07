@@ -5,7 +5,7 @@ Partagé entre les features agents, flows, etc.
 
 from beanie import PydanticObjectId
 
-from app.core.enums import Status
+from app.core.enums import Status, TeamMemberRole
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.features.auth.models import User
 from app.features.organizations.models import Organization
@@ -37,3 +37,30 @@ async def check_org_membership(user: User, org_id: str) -> Organization:
         raise ForbiddenError("Vous n'êtes pas membre de cette organisation")
 
     return org
+
+
+async def get_org_owner_user_ids(org_id: str | PydanticObjectId) -> list[str]:
+    """
+    Retourne la liste des user_id qui sont propriétaires d'une organisation.
+    Inclut le owner_id de l'org + tous les membres OWNER actifs de l'équipe racine.
+    """
+    org_oid = org_id if isinstance(org_id, PydanticObjectId) else PydanticObjectId(org_id)
+    org = await Organization.get(org_oid)
+    if not org:
+        return []
+
+    owner_ids: set[str] = {str(org.owner_id)}
+
+    root_team = await Team.find_one(
+        Team.organization_id == org.id,
+        Team.is_root == True,  # noqa: E712
+    )
+    if root_team:
+        owners = await TeamMember.find(
+            TeamMember.team_id == root_team.id,
+            TeamMember.role == TeamMemberRole.OWNER,
+            TeamMember.status == Status.ACTIVE,
+        ).to_list()
+        owner_ids.update(str(m.user_id) for m in owners)
+
+    return list(owner_ids)
