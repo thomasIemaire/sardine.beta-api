@@ -530,6 +530,25 @@ async def export_agent(user: User, org_id: str, agent_id: str) -> dict:
     }
 
 
+async def export_shared_agent(user: User, org_id: str, agent_id: str) -> dict:
+    """
+    Exporte un agent partagé au format JSON pour téléchargement.
+    Même logique que export_agent, mais pour les agents partagés.
+    """
+    agent, schema = await get_shared_agent(user, org_id, agent_id)
+
+    if not schema:
+        raise ValidationError("L'agent partagé n'a pas de schéma actif")
+
+    return {
+        "name": agent.name,
+        "description": agent.description,
+        "schema_data": schema,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "version": "1.0",  # Version du format d'export
+    }
+
+
 async def import_agent(
     user: User, org_id: str, data: dict,
 ) -> tuple[Agent, AgentVersion]:

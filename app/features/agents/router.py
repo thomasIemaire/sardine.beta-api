@@ -21,6 +21,7 @@ from app.features.agents.service import (
     create_version,
     delete_agent,
     export_agent,
+    export_shared_agent,
     fork_agent,
     get_agent,
     get_shared_agent,
@@ -315,6 +316,27 @@ async def export(org_id: str, agent_id: str, current_user: CurrentUser):
     import json
 
     data = await export_agent(current_user, org_id, agent_id)
+    json_content = json.dumps(data, indent=2, ensure_ascii=False)
+
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{data["name"]}.json"'
+        },
+    )
+
+
+@router.get("/shared/{agent_id}/export")
+async def export_shared(org_id: str, agent_id: str, current_user: CurrentUser):
+    """
+    Télécharger un agent partagé au format JSON.
+    Même logique que l'export normal, mais pour les agents partagés.
+    """
+    from fastapi.responses import Response
+    import json
+
+    data = await export_shared_agent(current_user, org_id, agent_id)
     json_content = json.dumps(data, indent=2, ensure_ascii=False)
 
     return Response(
