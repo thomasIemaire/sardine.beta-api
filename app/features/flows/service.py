@@ -505,8 +505,10 @@ async def fork_flow(
 def _extract_agent_ids(data: dict | list | str | int | float | bool | None) -> set[str]:
     """
     Extrait récursivement tous les IDs d'agents référencés dans flow_data.
-    Recherche les clés "agent_id", "agents", ou toute valeur qui ressemble à un ObjectId.
+    Recherche les clés "agent_id", "agents", ou toute valeur string qui ressemble à un ObjectId MongoDB (24 caractères hex).
     """
+    import re
+
     agent_ids = set()
 
     if isinstance(data, dict):
@@ -518,11 +520,17 @@ def _extract_agent_ids(data: dict | list | str | int | float | bool | None) -> s
                     for item in value:
                         if isinstance(item, str):
                             agent_ids.add(item)
+            elif isinstance(value, str) and re.match(r'^[a-f0-9]{24}$', value):
+                # Ajout automatique des strings qui ressemblent à des ObjectIds
+                agent_ids.add(value)
             else:
                 agent_ids.update(_extract_agent_ids(value))
     elif isinstance(data, list):
         for item in data:
-            agent_ids.update(_extract_agent_ids(item))
+            if isinstance(item, str) and re.match(r'^[a-f0-9]{24}$', item):
+                agent_ids.add(item)
+            else:
+                agent_ids.update(_extract_agent_ids(item))
 
     return agent_ids
 
