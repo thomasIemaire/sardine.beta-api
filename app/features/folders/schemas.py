@@ -8,9 +8,13 @@ from pydantic import BaseModel
 
 
 class FolderCreate(BaseModel):
-    """Création d'un sous-dossier."""
+    """
+    Création d'un dossier.
+    Si parent_id est null, le dossier est créé au niveau le plus haut
+    de l'organisation (rattaché à la racine système).
+    """
     name: str
-    parent_id: str  # ID du dossier parent
+    parent_id: str | None = None
 
 
 class FolderRename(BaseModel):
@@ -19,8 +23,11 @@ class FolderRename(BaseModel):
 
 
 class FolderMove(BaseModel):
-    """Déplacement d'un dossier."""
-    target_parent_id: str  # ID du nouveau dossier parent
+    """
+    Déplacement d'un dossier.
+    Si target_parent_id est null, le dossier est déplacé au niveau le plus haut.
+    """
+    target_parent_id: str | None = None
 
 
 class FolderRead(BaseModel):

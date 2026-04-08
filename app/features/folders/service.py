@@ -48,14 +48,21 @@ async def get_trash_folder(org_id: str) -> Folder:
 
 async def create_folder(org_id: str, payload: FolderCreate) -> Folder:
     """
-    Créer un sous-dossier.
+    Crée un dossier.
+    Si parent_id est null, le dossier est créé au niveau le plus haut
+    de l'organisation (rattaché à la racine système, transparente pour
+    le front).
     Le nom doit être unique dans le même dossier parent.
     """
-    parent = await Folder.get(PydanticObjectId(payload.parent_id))
-    if not parent:
-        raise NotFoundError("Dossier parent non trouvé")
-    if str(parent.organization_id) != org_id:
-        raise ForbiddenError("Le dossier parent n'appartient pas à cette organisation")
+    if payload.parent_id:
+        parent = await Folder.get(PydanticObjectId(payload.parent_id))
+        if not parent:
+            raise NotFoundError("Dossier parent non trouvé")
+        if str(parent.organization_id) != org_id:
+            raise ForbiddenError("Le dossier parent n'appartient pas à cette organisation")
+    else:
+        # Pas de parent fourni : utiliser la racine système de l'organisation
+        parent = await get_root_folder(org_id)
 
     # Unicité du nom dans le même parent
     existing = await Folder.find_one(
@@ -186,6 +193,67 @@ async def get_folder_contents(
     return [f for f in folders if str(f.id) in accessible]
 
 
+async def list_top_level_folders(org_id: str, user_id: str) -> list[Folder]:
+    """
+    Liste les dossiers de plus haut niveau accessibles a l'utilisateur.
+
+    Cas membre standard : retourne ses dossiers accessibles "top level"
+    (ceux dont aucun ancetre n'est aussi accessible directement).
+    """
+    from app.features.organizations.models import Organization
+    from app.features.permissions.service import get_accessible_folder_ids
+
+    org = await Organization.get(PydanticObjectId(org_id))
+    if not org:
+        raise NotFoundError("Organisation non trouvee")
+
+    is_org_owner = str(org.owner_id) == str(user_id)
+
+    # Owner de l'org : enfants directs de la racine systeme
+    if is_org_owner:
+        root = await get_root_folder(org_id)
+        return await Folder.find(
+            Folder.organization_id == PydanticObjectId(org_id),
+            Folder.parent_id == root.id,
+            Folder.deleted_at == None,  # noqa: E711
+        ).sort("name").to_list()
+
+    # Membre standard : top-level accessibles
+    accessible = await get_accessible_folder_ids(user_id, org_id)
+    direct_ids = {
+        fid for fid, r in accessible.items()
+        if not r.get("implicit")
+    }
+    if not direct_ids:
+        return []
+
+    all_folders = await Folder.find(
+        Folder.organization_id == PydanticObjectId(org_id),
+        Folder.deleted_at == None,  # noqa: E711
+    ).to_list()
+    folder_map = {str(f.id): f for f in all_folders}
+
+    top_level: list[Folder] = []
+    for fid in direct_ids:
+        f = folder_map.get(fid)
+        if not f:
+            continue
+        # Verifier qu'aucun ancetre n'est aussi accessible
+        current = f
+        has_accessible_ancestor = False
+        while current and current.parent_id:
+            parent_id = str(current.parent_id)
+            if parent_id in direct_ids:
+                has_accessible_ancestor = True
+                break
+            current = folder_map.get(parent_id)
+        if not has_accessible_ancestor:
+            top_level.append(f)
+
+    top_level.sort(key=lambda x: x.name)
+    return top_level
+
+
 async def get_breadcrumb(folder_id: str) -> list[dict]:
     """
     Construit le fil d'Ariane (breadcrumb) en remontant
@@ -196,19 +264,21 @@ async def get_breadcrumb(folder_id: str) -> list[dict]:
     seen: set[str] = set()
     max_depth = 100
 
-    # Remontee recursive vers le dossier racine (avec protection anti-boucle)
+    # Remontee recursive (avec protection anti-boucle).
+    # On exclut la racine systeme : elle n'est pas exposee au front.
     while current and len(breadcrumb) < max_depth:
         cid = str(current.id)
         if cid in seen:
             break  # Cycle detecte
         seen.add(cid)
-        breadcrumb.append({"id": cid, "name": current.name})
+        if not current.is_root:
+            breadcrumb.append({"id": cid, "name": current.name})
         if current.parent_id:
             current = await Folder.get(current.parent_id)
         else:
             break
 
-    # Inverser pour avoir racine → dossier courant
+    # Inverser pour avoir le plus haut → dossier courant
     breadcrumb.reverse()
     return breadcrumb
 
@@ -259,6 +329,8 @@ async def _get_all_descendants(folder_id: PydanticObjectId) -> set[str]:
 async def move_folder(folder_id: str, payload: FolderMove) -> Folder:
     """
     Déplacer un dossier vers un nouveau parent.
+    Si target_parent_id est null, le dossier est déplacé au niveau le plus haut
+    (rattaché à la racine système).
     Protections :
       - Pas de déplacement d'un dossier dans ses propres enfants (boucle)
       - Unicité du nom dans le nouveau parent
@@ -269,13 +341,17 @@ async def move_folder(folder_id: str, payload: FolderMove) -> Folder:
     if folder.is_root or folder.is_trash:
         raise ForbiddenError("Les dossiers système ne peuvent pas être déplacés")
 
-    target = await Folder.get(PydanticObjectId(payload.target_parent_id))
-    if not target:
-        raise NotFoundError("Dossier de destination non trouvé")
+    if payload.target_parent_id:
+        target = await Folder.get(PydanticObjectId(payload.target_parent_id))
+        if not target:
+            raise NotFoundError("Dossier de destination non trouvé")
+    else:
+        # Pas de cible : remonter au niveau le plus haut (racine système)
+        target = await get_root_folder(str(folder.organization_id))
 
     # Protection anti-boucle : le dossier ne peut pas être déplacé dans un de ses descendants
     descendants = await _get_all_descendants(folder.id)
-    if payload.target_parent_id in descendants:
+    if str(target.id) in descendants:
         raise ValidationError("Impossible : le dossier de destination est un sous-dossier")
 
     # Unicité du nom dans le nouveau parent

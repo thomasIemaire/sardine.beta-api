@@ -24,6 +24,7 @@ from app.features.folders.service import (
     get_root_folder,
     get_trash_contents,
     get_trash_folder,
+    list_top_level_folders,
     move_folder,
     rename_folder,
     restore_folder,
@@ -33,11 +34,29 @@ from app.features.folders.service import (
 router = APIRouter(prefix="/organizations/{org_id}/folders", tags=["Folders"])
 
 
-# ─── Dossiers systeme ────────────────────────────────────────────
+# ─── Point d'entree : dossiers de plus haut niveau ───────────────
 
-@router.get("/root", response_model=FolderRead)
+@router.get("/accessible", response_model=list[FolderRead])
+async def accessible(org_id: str, current_user: CurrentUser):
+    """
+    Point d'entree principal : retourne les dossiers de plus haut niveau
+    auxquels l'utilisateur a acces.
+    - Owner de l'org : tous les dossiers du premier niveau
+    - Membre standard : ses dossiers accessibles "top level" (les plus
+      hauts de chaque branche, peu importe leur emplacement reel)
+    """
+    folders = await list_top_level_folders(org_id, str(current_user.id))
+    return [FolderRead.from_folder(f) for f in folders]
+
+
+# ─── Dossiers systeme (deprecies) ────────────────────────────────
+
+@router.get("/root", response_model=FolderRead, deprecated=True)
 async def root(org_id: str, current_user: CurrentUser):
-    """Retourne le dossier racine de l'organisation."""
+    """
+    [DEPRECATED] Retourne le dossier racine systeme.
+    Utiliser GET /folders/accessible a la place pour obtenir le point d'entree.
+    """
     folder = await get_root_folder(org_id)
     return FolderRead.from_folder(folder)
 
