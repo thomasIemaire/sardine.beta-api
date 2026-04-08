@@ -77,3 +77,108 @@ class FlowShare(Document):
 
     class Settings:
         name = "flow_shares"
+
+
+# ─── Runtime : exécution d'un flow ───────────────────────────────
+
+
+class FlowExecution(Document):
+    """
+    Exécution d'un flow. Enregistre l'état complet + métadonnées.
+    Statut : pending, running, completed, failed, waiting, cancelled
+    """
+
+    flow_id: Indexed(PydanticObjectId)
+    organization_id: Indexed(PydanticObjectId)
+    status: str = Field(default="pending")  # pending, running, completed, failed, waiting, cancelled
+
+    trigger_type: str = "manual"  # manual, scheduled, webhook, subflow
+    triggered_by: PydanticObjectId | None = None
+
+    # Timeline
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    # Output / erreur
+    execution_data: dict = Field(default_factory=dict)
+    error: str | None = None
+
+    # Pause / approval
+    paused_at_node: str | None = None
+    paused_node_log_id: str | None = None
+    context_snapshot: dict | None = None
+
+    # Sous-flow
+    parent_execution_id: str | None = None
+    parent_flow_id: str | None = None
+    parent_node_id: str | None = None
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    class Settings:
+        name = "flow_executions"
+
+
+class ExecutionNodeLog(Document):
+    """
+    Journal d'exécution d'un nœud individuel.
+    Permet de tracer step-by-step et de reprendre après pause.
+    """
+
+    execution_id: Indexed(PydanticObjectId)
+    node_id: str
+    node_type: str
+    node_name: str
+    status: str = "running"  # running, completed, failed, waiting
+
+    output_port: int | None = None
+    error: str | None = None
+    metadata: dict | None = None
+
+    input_data: dict | None = None
+    output_data: dict | None = None
+
+    started_at: datetime
+    completed_at: datetime | None = None
+    duration_ms: int | None = None
+
+    # Loop tracking
+    parent_node_id: str | None = None
+    loop_iteration: int | None = None
+    loop_total: int | None = None
+
+    class Settings:
+        name = "execution_node_logs"
+
+
+class ApprovalTask(Document):
+    """
+    Tâche d'approbation créée par un nœud `approval` lors d'une pause.
+    L'utilisateur cible répond via /approval-tasks/{id}/respond.
+    """
+
+    flow_id: PydanticObjectId
+    execution_id: Indexed(PydanticObjectId)
+    node_id: str
+    organization_id: PydanticObjectId
+
+    title: str
+    message: str
+    options: list[dict] = Field(default_factory=list)  # [{"label": str, "value": str}]
+
+    assignee_type: str = "user"  # user, team
+    assignee_id: PydanticObjectId | None = None  # user_id ou team_id
+
+    status: str = "pending"  # pending, responded, expired
+    response: str | None = None
+    response_label: str | None = None
+    responded_by: PydanticObjectId | None = None
+    responded_at: datetime | None = None
+
+    expires_at: datetime | None = None
+    timeout_action: str = "reject"
+
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    class Settings:
+        name = "approval_tasks"

@@ -48,6 +48,140 @@ class FlowShareCreate(BaseModel):
     target_org_ids: list[str]
 
 
+# ─── Exécution ───────────────────────────────────────────────────
+
+
+class FlowExecuteRequest(BaseModel):
+    """Démarrage d'une exécution avec input data optionnelle."""
+    input_data: dict | None = None
+
+
+class ApprovalRespondRequest(BaseModel):
+    """Réponse à une tâche d'approbation."""
+    response: str  # une des "value" des options
+
+
+class FlowExecutionRead(BaseModel):
+    """Lecture d'une exécution."""
+    id: str
+    flow_id: str
+    organization_id: str
+    status: str
+    trigger_type: str
+    triggered_by: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    error: str | None
+    execution_data: dict
+    paused_at_node: str | None
+    parent_execution_id: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_execution(cls, execution) -> "FlowExecutionRead":
+        return cls(
+            id=str(execution.id),
+            flow_id=str(execution.flow_id),
+            organization_id=str(execution.organization_id),
+            status=execution.status,
+            trigger_type=execution.trigger_type,
+            triggered_by=str(execution.triggered_by) if execution.triggered_by else None,
+            started_at=execution.started_at,
+            completed_at=execution.completed_at,
+            error=execution.error,
+            execution_data=execution.execution_data or {},
+            paused_at_node=execution.paused_at_node,
+            parent_execution_id=execution.parent_execution_id,
+            created_at=execution.created_at,
+        )
+
+
+class NodeLogRead(BaseModel):
+    """Lecture d'un log de nœud."""
+    id: str
+    execution_id: str
+    node_id: str
+    node_type: str
+    node_name: str
+    status: str
+    output_port: int | None
+    error: str | None
+    metadata: dict | None
+    input_data: dict | None
+    output_data: dict | None
+    started_at: datetime
+    completed_at: datetime | None
+    duration_ms: int | None
+    parent_node_id: str | None
+    loop_iteration: int | None
+    loop_total: int | None
+
+    @classmethod
+    def from_log(cls, log) -> "NodeLogRead":
+        return cls(
+            id=str(log.id),
+            execution_id=str(log.execution_id),
+            node_id=log.node_id,
+            node_type=log.node_type,
+            node_name=log.node_name,
+            status=log.status,
+            output_port=log.output_port,
+            error=log.error,
+            metadata=log.metadata,
+            input_data=log.input_data,
+            output_data=log.output_data,
+            started_at=log.started_at,
+            completed_at=log.completed_at,
+            duration_ms=log.duration_ms,
+            parent_node_id=log.parent_node_id,
+            loop_iteration=log.loop_iteration,
+            loop_total=log.loop_total,
+        )
+
+
+class ApprovalTaskRead(BaseModel):
+    """Lecture d'une tâche d'approbation."""
+    id: str
+    flow_id: str
+    execution_id: str
+    node_id: str
+    organization_id: str
+    title: str
+    message: str
+    options: list[dict]
+    assignee_type: str
+    assignee_id: str | None
+    status: str
+    response: str | None
+    response_label: str | None
+    responded_by: str | None
+    responded_at: datetime | None
+    expires_at: datetime | None
+    created_at: datetime
+
+    @classmethod
+    def from_task(cls, task) -> "ApprovalTaskRead":
+        return cls(
+            id=str(task.id),
+            flow_id=str(task.flow_id),
+            execution_id=str(task.execution_id),
+            node_id=task.node_id,
+            organization_id=str(task.organization_id),
+            title=task.title,
+            message=task.message,
+            options=task.options,
+            assignee_type=task.assignee_type,
+            assignee_id=str(task.assignee_id) if task.assignee_id else None,
+            status=task.status,
+            response=task.response,
+            response_label=task.response_label,
+            responded_by=str(task.responded_by) if task.responded_by else None,
+            responded_at=task.responded_at,
+            expires_at=task.expires_at,
+            created_at=task.created_at,
+        )
+
+
 # ─── Réponses ────────────────────────────────────────────────────
 
 class FlowVersionRead(BaseModel):
