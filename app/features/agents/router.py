@@ -4,7 +4,7 @@ Toutes les routes nécessitent une authentification
 et l'appartenance à l'organisation.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, UploadFile
 
 from app.features.agents.schemas import (
     ActiveVersionUpdate,
@@ -20,11 +20,13 @@ from app.features.agents.service import (
     create_agent,
     create_version,
     delete_agent,
+    export_agent,
     fork_agent,
     get_agent,
     get_shared_agent,
     get_version,
     get_version_history,
+    import_agent,
     list_agent_shares,
     list_agents,
     list_shared_agents,
@@ -294,6 +296,56 @@ async def fork(org_id: str, agent_id: str, current_user: CurrentUser):
     Crée une copie liée à l'original par les versions.
     """
     agent, version = await fork_agent(current_user, org_id, agent_id)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(
+        agent, active_schema=version.schema_data,
+        creator_name=names.get(str(agent.created_by)),
+    )
+
+
+# ─── Export/Import ───────────────────────────────────────────────
+
+@router.get("/{agent_id}/export")
+async def export(org_id: str, agent_id: str, current_user: CurrentUser):
+    """
+    Télécharger un agent au format JSON.
+    Retourne le fichier JSON avec les métadonnées et le schéma actif.
+    """
+    from fastapi.responses import Response
+    import json
+
+    data = await export_agent(current_user, org_id, agent_id)
+    json_content = json.dumps(data, indent=2, ensure_ascii=False)
+
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{data["name"]}.json"'
+        },
+    )
+
+
+@router.post("/import", response_model=AgentRead, status_code=201)
+async def import_agent_route(
+    org_id: str, file: UploadFile, current_user: CurrentUser,
+):
+    """
+    Importer un agent depuis un fichier JSON uploadé.
+    Le fichier doit contenir le format exporté (nom, description, schema_data).
+    """
+    import json
+
+    if not file.filename.endswith(".json"):
+        raise ValidationError("Le fichier doit être au format JSON")
+
+    content = await file.read()
+    try:
+        data = json.loads(content.decode("utf-8"))
+    except json.JSONDecodeError:
+        raise ValidationError("Contenu JSON invalide")
+
+    agent, version = await import_agent(current_user, org_id, data)
     names = await get_user_names_map([agent.created_by])
     return AgentRead.from_agent(
         agent, active_schema=version.schema_data,
