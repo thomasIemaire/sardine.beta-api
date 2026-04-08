@@ -14,6 +14,7 @@ from beanie import PydanticObjectId
 from app.core.enums import FlowStatus
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.core.membership import check_org_membership
+from app.features.agents.models import Agent
 from app.features.auth.models import User
 from app.features.flows.models import Flow, FlowShare, FlowVersion
 
@@ -497,3 +498,177 @@ async def fork_flow(
     await forked_flow.set({"active_version_id": forked_version.id})
 
     return forked_flow, forked_version
+
+
+# ─── Export/Import ───────────────────────────────────────────────
+
+def _extract_agent_ids(data: dict | list | str | int | float | bool | None) -> set[str]:
+    """
+    Extrait récursivement tous les IDs d'agents référencés dans flow_data.
+    Recherche les clés "agent_id", "agents", ou toute valeur string qui ressemble à un ObjectId MongoDB (24 caractères hex).
+    """
+    import re
+
+    agent_ids = set()
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key in ("agent_id", "agents"):
+                if isinstance(value, str):
+                    agent_ids.add(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str):
+                            agent_ids.add(item)
+            elif isinstance(value, str) and re.match(r'^[a-f0-9]{24}$', value):
+                # Ajout automatique des strings qui ressemblent à des ObjectIds
+                agent_ids.add(value)
+            else:
+                agent_ids.update(_extract_agent_ids(value))
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, str) and re.match(r'^[a-f0-9]{24}$', item):
+                agent_ids.add(item)
+            else:
+                agent_ids.update(_extract_agent_ids(item))
+
+    return agent_ids
+
+
+async def export_flow(user: User, org_id: str, flow_id: str) -> dict:
+    """
+    Exporte un flow au format JSON pour téléchargement.
+    Inclut les métadonnées, flow_data, et les agents référencés.
+    """
+    from app.features.agents.service import export_agent
+
+    await check_org_membership(user, org_id)
+    flow = await _get_flow_for_org(flow_id, org_id)
+
+    if not flow.active_version_id:
+        raise ValidationError("Le flow n'a pas de version active")
+
+    version = await FlowVersion.get(flow.active_version_id)
+    if not version:
+        raise ValidationError("Version active introuvable")
+
+    # Extraire les agents référencés
+    agent_ids = _extract_agent_ids(version.flow_data)
+    agents = []
+    for agent_id in agent_ids:
+        try:
+            agent_data = await export_agent(user, org_id, agent_id)
+            agents.append(agent_data)
+        except (NotFoundError, ValidationError):
+            # Si un agent n'existe pas ou n'est pas accessible, on skip
+            pass
+
+    return {
+        "name": flow.name,
+        "description": flow.description,
+        "status": flow.status,
+        "flow_data": version.flow_data,
+        "agents": agents,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "version": "1.0",
+    }
+
+
+async def export_shared_flow(user: User, org_id: str, flow_id: str) -> dict:
+    """
+    Exporte un flow partagé au format JSON.
+    Même logique que export_flow, mais pour les flows partagés.
+    """
+    from app.features.agents.service import export_shared_agent
+
+    flow, flow_data = await get_shared_flow(user, org_id, flow_id)
+
+    if not flow_data:
+        raise ValidationError("Le flow partagé n'a pas de données actives")
+
+    # Extraire les agents référencés
+    agent_ids = _extract_agent_ids(flow_data)
+    agents = []
+    for agent_id in agent_ids:
+        try:
+            agent_data = await export_shared_agent(user, org_id, agent_id)
+            agents.append(agent_data)
+        except (NotFoundError, ValidationError):
+            # Si un agent n'existe pas ou n'est pas accessible, on skip
+            pass
+
+    return {
+        "name": flow.name,
+        "description": flow.description,
+        "status": flow.status,
+        "flow_data": flow_data,
+        "agents": agents,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "version": "1.0",
+    }
+
+
+async def import_flow(
+    user: User, org_id: str, data: dict,
+) -> tuple[Flow, FlowVersion]:
+    """
+    Importe un flow depuis un JSON exporté.
+    Crée les agents manquants, puis le flow avec sa version initiale.
+    """
+    from app.features.agents.service import import_agent
+
+    await check_org_membership(user, org_id)
+
+    # Validation basique
+    if not isinstance(data, dict):
+        raise ValidationError("Format JSON invalide")
+    if "name" not in data or not isinstance(data["name"], str):
+        raise ValidationError("Nom du flow manquant ou invalide")
+    if "flow_data" not in data or not isinstance(data["flow_data"], dict):
+        raise ValidationError("Données du flow manquantes ou invalides")
+
+    name = data["name"]
+    description = data.get("description", "")
+    status = data.get("status", FlowStatus.PENDING)
+    flow_data = data["flow_data"]
+    agents_data = data.get("agents", [])
+
+    # Importer les agents manquants
+    agent_id_map = {}  # old_id -> new_id
+    for agent_data in agents_data:
+        if not isinstance(agent_data, dict) or "name" not in agent_data:
+            continue
+        try:
+            # Vérifier si un agent avec ce nom existe déjà
+            existing_agent = await Agent.find_one(
+                Agent.name == agent_data["name"],
+                Agent.organization_id == PydanticObjectId(org_id),
+            )
+            if existing_agent:
+                agent_id_map[agent_data.get("id", agent_data["name"])] = str(existing_agent.id)
+            else:
+                # Importer l'agent
+                agent, _ = await import_agent(user, org_id, agent_data)
+                agent_id_map[agent_data.get("id", agent_data["name"])] = str(agent.id)
+        except Exception:
+            # Si échec, skip
+            pass
+
+    # Mettre à jour flow_data avec les nouveaux IDs
+    def _update_agent_refs(data):
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key == "agent_id" and isinstance(value, str) and value in agent_id_map:
+                    data[key] = agent_id_map[value]
+                elif key == "agents" and isinstance(value, list):
+                    data[key] = [agent_id_map.get(item, item) if isinstance(item, str) else item for item in value]
+                else:
+                    _update_agent_refs(value)
+        elif isinstance(data, list):
+            for item in data:
+                _update_agent_refs(item)
+
+    _update_agent_refs(flow_data)
+
+    # Créer le flow
+    return await create_flow(user, org_id, name, flow_data, description)

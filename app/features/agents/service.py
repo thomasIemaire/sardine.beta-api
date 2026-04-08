@@ -502,3 +502,73 @@ async def fork_agent(
     await forked_agent.set({"active_version_id": forked_version.id})
 
     return forked_agent, forked_version
+
+
+# ─── Export/Import ───────────────────────────────────────────────
+
+async def export_agent(user: User, org_id: str, agent_id: str) -> dict:
+    """
+    Exporte un agent au format JSON pour téléchargement.
+    Inclut les métadonnées et le schéma de la version active.
+    """
+    await check_org_membership(user, org_id)
+    agent = await _get_agent_for_org(agent_id, org_id)
+
+    if not agent.active_version_id:
+        raise ValidationError("L'agent n'a pas de version active")
+
+    version = await AgentVersion.get(agent.active_version_id)
+    if not version:
+        raise ValidationError("Version active introuvable")
+
+    return {
+        "name": agent.name,
+        "description": agent.description,
+        "schema_data": version.schema_data,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "version": "1.0",  # Version du format d'export
+    }
+
+
+async def export_shared_agent(user: User, org_id: str, agent_id: str) -> dict:
+    """
+    Exporte un agent partagé au format JSON pour téléchargement.
+    Même logique que export_agent, mais pour les agents partagés.
+    """
+    agent, schema = await get_shared_agent(user, org_id, agent_id)
+
+    if not schema:
+        raise ValidationError("L'agent partagé n'a pas de schéma actif")
+
+    return {
+        "name": agent.name,
+        "description": agent.description,
+        "schema_data": schema,
+        "exported_at": datetime.now(UTC).isoformat(),
+        "version": "1.0",  # Version du format d'export
+    }
+
+
+async def import_agent(
+    user: User, org_id: str, data: dict,
+) -> tuple[Agent, AgentVersion]:
+    """
+    Importe un agent depuis un JSON exporté.
+    Valide le format et crée l'agent avec sa version initiale.
+    """
+    await check_org_membership(user, org_id)
+
+    # Validation basique du format
+    if not isinstance(data, dict):
+        raise ValidationError("Format JSON invalide")
+    if "name" not in data or not isinstance(data["name"], str):
+        raise ValidationError("Nom de l'agent manquant ou invalide")
+    if "schema_data" not in data or not isinstance(data["schema_data"], dict):
+        raise ValidationError("Schéma de données manquant ou invalide")
+
+    name = data["name"]
+    description = data.get("description", "")
+    schema_data = data["schema_data"]
+
+    # Créer l'agent (réutilise la logique existante)
+    return await create_agent(user, org_id, name, schema_data, description)
