@@ -54,6 +54,21 @@ class ConnectionManager:
         for ws in dead:
             self.disconnect(user_id, ws)
 
+    async def send_to_users(self, user_ids: list[str], data: dict) -> None:
+        """Envoie un message à tous les utilisateurs de la liste."""
+        for uid in user_ids:
+            if self._connections.get(uid):
+                await self.send_to_user(uid, data)
+
+    async def send_to_org(self, org_id: str, data: dict) -> None:
+        """
+        Broadcast un message à tous les membres actifs d'une organisation
+        (owner + équipe racine).
+        """
+        from app.core.membership import get_org_member_user_ids
+        user_ids = await get_org_member_user_ids(org_id)
+        await self.send_to_users(user_ids, data)
+
     def is_connected(self, user_id: str) -> bool:
         """Vérifie si un utilisateur a au moins une connexion active."""
         return bool(self._connections.get(user_id))

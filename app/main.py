@@ -159,6 +159,7 @@ from app.features.audit.router import router as audit_router
 from app.features.auth.router import router as auth_router
 from app.features.files.router import router as files_router
 from app.features.flows.router import router as flows_router
+from app.features.flows.execution_router import router as flows_execution_router
 from app.features.folders.router import router as folders_router
 from app.features.notifications.router import router as notifications_router
 from app.features.organizations.router import router as organizations_router
@@ -176,6 +177,7 @@ app.include_router(teams_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
 app.include_router(flows_router, prefix="/api")
+app.include_router(flows_execution_router, prefix="/api")
 app.include_router(permissions_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(tags_router, prefix="/api")

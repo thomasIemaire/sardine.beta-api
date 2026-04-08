@@ -26,7 +26,14 @@ async def init_db() -> None:
     from app.features.files.comments import FileComment
     from app.features.files.models import File, FileVersion
     from app.features.files.tags import Tag
-    from app.features.flows.models import Flow, FlowShare, FlowVersion
+    from app.features.flows.models import (
+        ApprovalTask,
+        ExecutionNodeLog,
+        Flow,
+        FlowExecution,
+        FlowShare,
+        FlowVersion,
+    )
     from app.features.folders.models import Folder
     from app.features.notifications.models import Notification
     from app.features.organizations.models import Organization
@@ -51,6 +58,9 @@ async def init_db() -> None:
             Flow,
             FlowVersion,
             FlowShare,
+            FlowExecution,
+            ExecutionNodeLog,
+            ApprovalTask,
             File,
             FileVersion,
             FileComment,

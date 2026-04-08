@@ -39,6 +39,33 @@ async def check_org_membership(user: User, org_id: str) -> Organization:
     return org
 
 
+async def get_org_member_user_ids(org_id: str | PydanticObjectId) -> list[str]:
+    """
+    Retourne la liste de tous les user_id membres actifs d'une organisation.
+    Inclut le owner_id de l'org + tous les membres actifs de l'équipe racine
+    (peu importe leur rôle owner/member).
+    """
+    org_oid = org_id if isinstance(org_id, PydanticObjectId) else PydanticObjectId(org_id)
+    org = await Organization.get(org_oid)
+    if not org:
+        return []
+
+    user_ids: set[str] = {str(org.owner_id)}
+
+    root_team = await Team.find_one(
+        Team.organization_id == org.id,
+        Team.is_root == True,  # noqa: E712
+    )
+    if root_team:
+        members = await TeamMember.find(
+            TeamMember.team_id == root_team.id,
+            TeamMember.status == Status.ACTIVE,
+        ).to_list()
+        user_ids.update(str(m.user_id) for m in members)
+
+    return list(user_ids)
+
+
 async def get_org_owner_user_ids(org_id: str | PydanticObjectId) -> list[str]:
     """
     Retourne la liste des user_id qui sont propriétaires d'une organisation.

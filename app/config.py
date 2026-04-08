@@ -25,5 +25,10 @@ class Settings(BaseSettings):
     # Purge corbeille : intervalle en heures entre deux exécutions
     TRASH_PURGE_INTERVAL_HOURS: int = 24
 
+    # Serveur GPU pour les nœuds classification / determination / agent
+    GPU_API_BASE_URL: str = ""
+    GPU_API_KEY: str = ""
+    GPU_API_TIMEOUT: int = 120  # secondes
+
 
 settings = Settings()
