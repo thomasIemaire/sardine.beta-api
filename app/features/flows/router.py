@@ -4,7 +4,7 @@ Toutes les routes nécessitent une authentification
 et l'appartenance à l'organisation.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, UploadFile
 
 from app.core.users_lookup import get_user_names_map
 from app.features.auth.dependencies import CurrentUser
@@ -23,11 +23,14 @@ from app.features.flows.service import (
     create_flow,
     create_version,
     delete_flow,
+    export_flow,
+    export_shared_flow,
     fork_flow,
     get_flow,
     get_shared_flow,
     get_version,
     get_version_history,
+    import_flow,
     list_flow_shares,
     list_flows,
     list_shared_flows,
@@ -297,6 +300,78 @@ async def fork(org_id: str, flow_id: str, current_user: CurrentUser):
     Crée une copie liée à l'original par les versions.
     """
     flow, version = await fork_flow(current_user, org_id, flow_id)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, active_data=version.flow_data,
+        creator_name=names.get(str(flow.created_by)),
+    )
+
+
+# ─── Export/Import ───────────────────────────────────────────────
+
+@router.get("/{flow_id}/export")
+async def export(org_id: str, flow_id: str, current_user: CurrentUser):
+    """
+    Télécharger un flow au format JSON.
+    Retourne le fichier JSON avec les métadonnées, flow_data, et les agents référencés.
+    """
+    from fastapi.responses import Response
+    import json
+
+    data = await export_flow(current_user, org_id, flow_id)
+    json_content = json.dumps(data, indent=2, ensure_ascii=False)
+
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{data["name"]}.json"'
+        },
+    )
+
+
+@router.get("/shared/{flow_id}/export")
+async def export_shared(org_id: str, flow_id: str, current_user: CurrentUser):
+    """
+    Télécharger un flow partagé au format JSON.
+    Même logique que l'export normal, mais pour les flows partagés.
+    """
+    from fastapi.responses import Response
+    import json
+
+    data = await export_shared_flow(current_user, org_id, flow_id)
+    json_content = json.dumps(data, indent=2, ensure_ascii=False)
+
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{data["name"]}.json"'
+        },
+    )
+
+
+@router.post("/import", response_model=FlowRead, status_code=201)
+async def import_flow_route(
+    org_id: str, file: UploadFile, current_user: CurrentUser,
+):
+    """
+    Importer un flow depuis un fichier JSON uploadé.
+    Le fichier doit contenir le format exporté (nom, description, flow_data, agents).
+    Les agents manquants sont automatiquement importés.
+    """
+    import json
+
+    if not file.filename.endswith(".json"):
+        raise ValidationError("Le fichier doit être au format JSON")
+
+    content = await file.read()
+    try:
+        data = json.loads(content.decode("utf-8"))
+    except json.JSONDecodeError:
+        raise ValidationError("Contenu JSON invalide")
+
+    flow, version = await import_flow(current_user, org_id, data)
     names = await get_user_names_map([flow.created_by])
     return FlowRead.from_flow(
         flow, active_data=version.flow_data,
