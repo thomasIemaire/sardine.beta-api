@@ -413,6 +413,20 @@ async def restore_folder(folder_id: str) -> Folder:
     return folder
 
 
+async def purge_folder(folder_id: str) -> None:
+    """Supprime définitivement un dossier en corbeille (irréversible)."""
+    folder = await Folder.get(PydanticObjectId(folder_id))
+    if not folder:
+        raise NotFoundError("Dossier non trouvé")
+    if folder.is_root or folder.is_trash:
+        raise ValidationError("Les dossiers système ne peuvent pas être supprimés")
+    if folder.deleted_at is None:
+        raise ValidationError("Ce dossier n'est pas en corbeille")
+    from app.features.permissions.service import cleanup_folder_permissions
+    await cleanup_folder_permissions(folder_id)
+    await folder.delete()
+
+
 async def purge_expired_trash() -> int:
     """
     Suppression définitive des éléments dont la rétention

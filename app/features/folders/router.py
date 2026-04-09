@@ -26,6 +26,7 @@ from app.features.folders.service import (
     get_trash_folder,
     list_top_level_folders,
     move_folder,
+    purge_folder,
     rename_folder,
     restore_folder,
     soft_delete_folder,
@@ -127,6 +128,13 @@ async def restore(folder_id: str, current_user: CurrentUser):
     """Restaurer un élément depuis la corbeille."""
     folder = await restore_folder(folder_id)
     return FolderRead.from_folder(folder)
+
+
+@router.delete("/{folder_id}/purge", response_model=MessageResponse)
+async def purge(folder_id: str, current_user: CurrentUser):
+    """Supprimer définitivement un dossier en corbeille (irréversible)."""
+    await purge_folder(folder_id)
+    return MessageResponse(message="Dossier supprimé définitivement")
 
 
 @router.delete("/trash/empty", response_model=MessageResponse)
