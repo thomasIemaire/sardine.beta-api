@@ -19,13 +19,15 @@ from app.features.auth.models import User
 from app.features.flows.models import Flow, FlowShare, FlowVersion
 
 
-async def _get_flow_for_org(flow_id: str, org_id: str) -> Flow:
+async def _get_flow_for_org(flow_id: str, org_id: str, include_deleted: bool = False) -> Flow:
     """Récupère un flow et vérifie qu'il appartient à l'organisation."""
     flow = await Flow.get(PydanticObjectId(flow_id))
     if not flow:
         raise NotFoundError("Flow non trouvé")
     if str(flow.organization_id) != org_id:
         raise NotFoundError("Flow non trouvé dans cette organisation")
+    if not include_deleted and flow.deleted_at is not None:
+        raise NotFoundError("Flow non trouvé")
     return flow
 
 
@@ -96,6 +98,7 @@ async def list_flows(
 
     query = Flow.find(
         Flow.organization_id == PydanticObjectId(org_id),
+        {"deleted_at": None},
         filters,
     )
     return await paginate(query, page, page_size, sort_field=sort_field)
@@ -151,13 +154,60 @@ async def update_flow(
 
 
 async def delete_flow(user: User, org_id: str, flow_id: str) -> None:
-    """Supprime un flow et toutes ses versions."""
+    """Déplace un flow dans la corbeille (suppression douce)."""
     await check_org_membership(user, org_id)
     flow = await _get_flow_for_org(flow_id, org_id)
+    await flow.set({"deleted_at": datetime.now(UTC), "updated_at": datetime.now(UTC)})
 
-    # Suppression cascade des versions
+
+async def list_trashed_flows(user: User, org_id: str) -> list[Flow]:
+    """Liste les flows en corbeille de l'organisation."""
+    await check_org_membership(user, org_id)
+    return await Flow.find(
+        Flow.organization_id == PydanticObjectId(org_id),
+        {"deleted_at": {"$ne": None}},
+    ).sort("-deleted_at").to_list()
+
+
+async def restore_flow(user: User, org_id: str, flow_id: str) -> Flow:
+    """Restaure un flow depuis la corbeille."""
+    await check_org_membership(user, org_id)
+    flow = await _get_flow_for_org(flow_id, org_id, include_deleted=True)
+    if flow.deleted_at is None:
+        raise ValidationError("Ce flow n'est pas en corbeille")
+    await flow.set({"deleted_at": None, "updated_at": datetime.now(UTC)})
+    return flow
+
+
+async def purge_flow(user: User, org_id: str, flow_id: str) -> None:
+    """Supprime définitivement un flow en corbeille et toutes ses versions."""
+    await check_org_membership(user, org_id)
+    flow = await _get_flow_for_org(flow_id, org_id, include_deleted=True)
+    if flow.deleted_at is None:
+        raise ValidationError("Ce flow n'est pas en corbeille")
     await FlowVersion.find(FlowVersion.flow_id == flow.id).delete()
+    await FlowShare.find(FlowShare.flow_id == flow.id).delete()
     await flow.delete()
+
+
+async def purge_expired_flow_trash(days: int = 30) -> int:
+    """
+    Supprime définitivement les flows en corbeille depuis plus de `days` jours.
+    Appelé par la tâche de fond périodique.
+    """
+    from datetime import timedelta
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    expired = await Flow.find(
+        {"deleted_at": {"$ne": None, "$lt": cutoff}}
+    ).to_list()
+
+    count = 0
+    for flow in expired:
+        await FlowVersion.find(FlowVersion.flow_id == flow.id).delete()
+        await FlowShare.find(FlowShare.flow_id == flow.id).delete()
+        await flow.delete()
+        count += 1
+    return count
 
 
 # ─── Versioning ──────────────────────────────────────────────────

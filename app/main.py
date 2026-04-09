@@ -75,6 +75,24 @@ async def _file_purge_loop() -> None:
         await asyncio.sleep(24 * 3600)
 
 
+async def _flow_purge_loop() -> None:
+    """
+    Tâche de fond qui purge les flows en corbeille
+    dont la rétention de 30 jours est expirée. S'exécute toutes les 24h.
+    """
+    from app.features.flows.service import purge_expired_flow_trash
+
+    while True:
+        try:
+            count = await purge_expired_flow_trash(days=30)
+            if count > 0:
+                logger.info("Flow trash purge completed: %d flows removed", count)
+        except Exception:
+            logger.exception("Error during flow trash purge")
+
+        await asyncio.sleep(24 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """
@@ -88,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     purge_task = asyncio.create_task(_trash_purge_loop())
     notif_purge_task = asyncio.create_task(_notification_purge_loop())
     file_purge_task = asyncio.create_task(_file_purge_loop())
+    flow_purge_task = asyncio.create_task(_flow_purge_loop())
 
     yield
 
@@ -95,7 +114,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     purge_task.cancel()
     notif_purge_task.cancel()
     file_purge_task.cancel()
-    for task in (purge_task, notif_purge_task, file_purge_task):
+    flow_purge_task.cancel()
+    for task in (purge_task, notif_purge_task, file_purge_task, flow_purge_task):
         try:
             await task
         except asyncio.CancelledError:
