@@ -351,14 +351,15 @@ async def export_shared(org_id: str, flow_id: str, current_user: CurrentUser):
     )
 
 
-@router.post("/import", response_model=FlowRead, status_code=201)
+@router.post("/import", response_model=list[FlowRead], status_code=201)
 async def import_flow_route(
     org_id: str, file: UploadFile, current_user: CurrentUser,
 ):
     """
     Importer un flow depuis un fichier JSON uploadé.
-    Le fichier doit contenir le format exporté (nom, description, flow_data, agents).
-    Les agents manquants sont automatiquement importés.
+    Retourne la liste de tous les flows créés : subflows + flow principal.
+    Le dernier élément de la liste est toujours le flow principal importé.
+    Les agents et subflows manquants sont automatiquement recréés.
     """
     import json
 
@@ -371,9 +372,15 @@ async def import_flow_route(
     except json.JSONDecodeError:
         raise ValidationError("Contenu JSON invalide")
 
-    flow, version = await import_flow(current_user, org_id, data)
-    names = await get_user_names_map([flow.created_by])
-    return FlowRead.from_flow(
-        flow, active_data=version.flow_data,
-        creator_name=names.get(str(flow.created_by)),
-    )
+    all_created = await import_flow(current_user, org_id, data)
+
+    creator_ids = list({flow.created_by for flow, _ in all_created})
+    names = await get_user_names_map(creator_ids)
+
+    return [
+        FlowRead.from_flow(
+            flow, active_data=version.flow_data,
+            creator_name=names.get(str(flow.created_by)),
+        )
+        for flow, version in all_created
+    ]
