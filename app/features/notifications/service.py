@@ -265,8 +265,9 @@ async def _execute_action_handler(
     if action_type and action_type in _action_handlers:
         return await _action_handlers[action_type](notif, action_key)
 
-    # Comportement par défaut : accept → accepted, autre → rejected
-    if action_key == "accept":
+    # Comportement par défaut : les clés "positives" → accepted, autres → rejected
+    positive_keys = {"accept", "approved", "approve", "yes", "confirm", "ok"}
+    if action_key.lower() in positive_keys:
         return NotificationActionStatus.ACCEPTED
     return NotificationActionStatus.REJECTED
 

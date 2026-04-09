@@ -4,6 +4,8 @@ Toutes les routes nécessitent une authentification
 et l'appartenance à l'organisation.
 """
 
+import asyncio
+
 from fastapi import APIRouter, Query, UploadFile
 
 from app.features.agents.schemas import (
@@ -25,13 +27,17 @@ from app.features.agents.service import (
     fork_agent,
     get_agent,
     get_shared_agent,
+    get_used_agent_ids,
     get_version,
     get_version_history,
     import_agent,
     list_agent_shares,
     list_agents,
     list_shared_agents,
+    list_trashed_agents,
     list_versions,
+    purge_agent,
+    restore_agent,
     share_agent,
     switch_active_version,
     unshare_agent,
@@ -80,10 +86,17 @@ async def list_all(
         creator=creator, origin=origin,
         created_from=created_from, created_to=created_to,
     )
-    names = await get_user_names_map([a.created_by for a in result.items])
+    names, used_ids = await asyncio.gather(
+        get_user_names_map([a.created_by for a in result.items]),
+        get_used_agent_ids(org_id),
+    )
     return {
         "items": [
-            AgentRead.from_agent(a, creator_name=names.get(str(a.created_by)))
+            AgentRead.from_agent(
+                a,
+                creator_name=names.get(str(a.created_by)),
+                used_in_flows=str(a.id) in used_ids,
+            )
             for a in result.items
         ],
         "total": result.total,
@@ -134,6 +147,20 @@ async def get_shared(org_id: str, agent_id: str, current_user: CurrentUser):
     )
 
 
+# ─── Corbeille ───────────────────────────────────────────────────
+# Déclarée AVANT /{agent_id} pour éviter le conflit de route
+
+@router.get("/trash", response_model=list[AgentRead])
+async def list_trash(org_id: str, current_user: CurrentUser):
+    """Liste les agents en corbeille de l'organisation."""
+    agents = await list_trashed_agents(current_user, org_id)
+    names = await get_user_names_map([a.created_by for a in agents])
+    return [
+        AgentRead.from_agent(a, creator_name=names.get(str(a.created_by)))
+        for a in agents
+    ]
+
+
 @router.get("/{agent_id}", response_model=AgentRead)
 async def get_one(org_id: str, agent_id: str, current_user: CurrentUser):
     """Détail d'un agent avec le schéma de la version active."""
@@ -162,9 +189,24 @@ async def update(
 
 @router.delete("/{agent_id}", response_model=MessageResponse)
 async def delete(org_id: str, agent_id: str, current_user: CurrentUser):
-    """Supprimer un agent et toutes ses versions."""
+    """Déplacer un agent dans la corbeille (suppression douce)."""
     await delete_agent(current_user, org_id, agent_id)
-    return MessageResponse(message="Agent supprimé")
+    return MessageResponse(message="Agent déplacé dans la corbeille")
+
+
+@router.post("/{agent_id}/restore", response_model=AgentRead)
+async def restore(org_id: str, agent_id: str, current_user: CurrentUser):
+    """Restaurer un agent depuis la corbeille."""
+    agent = await restore_agent(current_user, org_id, agent_id)
+    names = await get_user_names_map([agent.created_by])
+    return AgentRead.from_agent(agent, creator_name=names.get(str(agent.created_by)))
+
+
+@router.delete("/{agent_id}/purge", response_model=MessageResponse)
+async def purge(org_id: str, agent_id: str, current_user: CurrentUser):
+    """Supprimer définitivement un agent en corbeille (irréversible)."""
+    await purge_agent(current_user, org_id, agent_id)
+    return MessageResponse(message="Agent supprimé définitivement")
 
 
 # ─── Versioning ──────────────────────────────────────────────────

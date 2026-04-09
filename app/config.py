@@ -30,5 +30,10 @@ class Settings(BaseSettings):
     GPU_API_KEY: str = ""
     GPU_API_TIMEOUT: int = 120  # secondes
 
+    # Brevo (envoi d'emails transactionnels)
+    BREVO_API_KEY: str = ""
+    BREVO_SENDER_EMAIL: str = "noreply@sardine.app"
+    BREVO_SENDER_NAME: str = "Sardine"
+
 
 settings = Settings()

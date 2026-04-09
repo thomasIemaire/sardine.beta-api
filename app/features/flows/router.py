@@ -34,7 +34,10 @@ from app.features.flows.service import (
     list_flow_shares,
     list_flows,
     list_shared_flows,
+    list_trashed_flows,
     list_versions,
+    purge_flow,
+    restore_flow,
     share_flow,
     switch_active_version,
     unshare_flow,
@@ -135,6 +138,20 @@ async def get_shared(org_id: str, flow_id: str, current_user: CurrentUser):
     )
 
 
+# ─── Corbeille ───────────────────────────────────────────────────
+# Déclarées AVANT /{flow_id} pour éviter le conflit de route
+
+@router.get("/trash", response_model=list[FlowRead])
+async def list_trash(org_id: str, current_user: CurrentUser):
+    """Liste les flows en corbeille de l'organisation."""
+    flows = await list_trashed_flows(current_user, org_id)
+    names = await get_user_names_map([f.created_by for f in flows])
+    return [
+        FlowRead.from_flow(f, creator_name=names.get(str(f.created_by)))
+        for f in flows
+    ]
+
+
 @router.get("/{flow_id}", response_model=FlowRead)
 async def get_one(org_id: str, flow_id: str, current_user: CurrentUser):
     """Détail d'un flow avec les données de la version active."""
@@ -165,9 +182,24 @@ async def update(
 
 @router.delete("/{flow_id}", response_model=MessageResponse)
 async def delete(org_id: str, flow_id: str, current_user: CurrentUser):
-    """Supprimer un flow et toutes ses versions."""
+    """Déplacer un flow dans la corbeille (suppression douce)."""
     await delete_flow(current_user, org_id, flow_id)
-    return MessageResponse(message="Flow supprimé")
+    return MessageResponse(message="Flow déplacé dans la corbeille")
+
+
+@router.post("/{flow_id}/restore", response_model=FlowRead)
+async def restore(org_id: str, flow_id: str, current_user: CurrentUser):
+    """Restaurer un flow depuis la corbeille."""
+    flow = await restore_flow(current_user, org_id, flow_id)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(flow, creator_name=names.get(str(flow.created_by)))
+
+
+@router.delete("/{flow_id}/purge", response_model=MessageResponse)
+async def purge(org_id: str, flow_id: str, current_user: CurrentUser):
+    """Supprimer définitivement un flow en corbeille (irréversible)."""
+    await purge_flow(current_user, org_id, flow_id)
+    return MessageResponse(message="Flow supprimé définitivement")
 
 
 # ─── Versioning ──────────────────────────────────────────────────
@@ -351,14 +383,15 @@ async def export_shared(org_id: str, flow_id: str, current_user: CurrentUser):
     )
 
 
-@router.post("/import", response_model=FlowRead, status_code=201)
+@router.post("/import", response_model=list[FlowRead], status_code=201)
 async def import_flow_route(
     org_id: str, file: UploadFile, current_user: CurrentUser,
 ):
     """
     Importer un flow depuis un fichier JSON uploadé.
-    Le fichier doit contenir le format exporté (nom, description, flow_data, agents).
-    Les agents manquants sont automatiquement importés.
+    Retourne la liste de tous les flows créés : subflows + flow principal.
+    Le dernier élément de la liste est toujours le flow principal importé.
+    Les agents et subflows manquants sont automatiquement recréés.
     """
     import json
 
@@ -371,9 +404,15 @@ async def import_flow_route(
     except json.JSONDecodeError:
         raise ValidationError("Contenu JSON invalide")
 
-    flow, version = await import_flow(current_user, org_id, data)
-    names = await get_user_names_map([flow.created_by])
-    return FlowRead.from_flow(
-        flow, active_data=version.flow_data,
-        creator_name=names.get(str(flow.created_by)),
-    )
+    all_created = await import_flow(current_user, org_id, data)
+
+    creator_ids = list({flow.created_by for flow, _ in all_created})
+    names = await get_user_names_map(creator_ids)
+
+    return [
+        FlowRead.from_flow(
+            flow, active_data=version.flow_data,
+            creator_name=names.get(str(flow.created_by)),
+        )
+        for flow, version in all_created
+    ]

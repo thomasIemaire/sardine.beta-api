@@ -41,6 +41,9 @@ class Flow(Document):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
+    # Suppression douce — None = actif, datetime = en corbeille
+    deleted_at: datetime | None = None
+
     class Settings:
         name = "flows"
 

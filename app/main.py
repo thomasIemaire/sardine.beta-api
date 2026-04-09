@@ -75,6 +75,42 @@ async def _file_purge_loop() -> None:
         await asyncio.sleep(24 * 3600)
 
 
+async def _flow_purge_loop() -> None:
+    """
+    Tâche de fond qui purge les flows en corbeille
+    dont la rétention de 30 jours est expirée. S'exécute toutes les 24h.
+    """
+    from app.features.flows.service import purge_expired_flow_trash
+
+    while True:
+        try:
+            count = await purge_expired_flow_trash(days=30)
+            if count > 0:
+                logger.info("Flow trash purge completed: %d flows removed", count)
+        except Exception:
+            logger.exception("Error during flow trash purge")
+
+        await asyncio.sleep(24 * 3600)
+
+
+async def _agent_purge_loop() -> None:
+    """
+    Tâche de fond qui purge les agents en corbeille
+    dont la rétention de 30 jours est expirée. S'exécute toutes les 24h.
+    """
+    from app.features.agents.service import purge_expired_agent_trash
+
+    while True:
+        try:
+            count = await purge_expired_agent_trash(days=30)
+            if count > 0:
+                logger.info("Agent trash purge completed: %d agents removed", count)
+        except Exception:
+            logger.exception("Error during agent trash purge")
+
+        await asyncio.sleep(24 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """
@@ -88,6 +124,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     purge_task = asyncio.create_task(_trash_purge_loop())
     notif_purge_task = asyncio.create_task(_notification_purge_loop())
     file_purge_task = asyncio.create_task(_file_purge_loop())
+    flow_purge_task = asyncio.create_task(_flow_purge_loop())
+    agent_purge_task = asyncio.create_task(_agent_purge_loop())
 
     yield
 
@@ -95,7 +133,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     purge_task.cancel()
     notif_purge_task.cancel()
     file_purge_task.cancel()
-    for task in (purge_task, notif_purge_task, file_purge_task):
+    flow_purge_task.cancel()
+    agent_purge_task.cancel()
+    for task in (purge_task, notif_purge_task, file_purge_task, flow_purge_task, agent_purge_task):
         try:
             await task
         except asyncio.CancelledError:
@@ -190,3 +230,48 @@ app.include_router(api_keys_router, prefix="/api")
 async def health_check():
     """Endpoint de santé pour les healthchecks infra."""
     return {"status": "ok", "environment": settings.ENVIRONMENT}
+
+
+# ─── Handler approbation flow ─────────────────────────────────────
+
+async def _handle_flow_approval(notif, action_key: str) -> str:
+    """
+    Handler appelé quand l'utilisateur répond à une notification d'approbation.
+    Reprend l'exécution du flow avec la valeur choisie.
+    """
+    import asyncio
+    from app.core.enums import NotificationActionStatus
+    from app.features.flows.engine import FlowEngine, register_execution
+    from app.features.flows.models import ApprovalTask
+
+    approval_task_id = notif.action_payload.get("approval_task_id")
+    execution_id = notif.action_payload.get("execution_id")
+
+    if not approval_task_id or not execution_id:
+        return NotificationActionStatus.REJECTED
+
+    # Mettre à jour l'ApprovalTask
+    from beanie import PydanticObjectId
+    task = await ApprovalTask.get(PydanticObjectId(approval_task_id))
+    if task and task.status == "pending":
+        from datetime import UTC, datetime
+        from app.features.auth.models import User
+        user = await User.get(PydanticObjectId(str(notif.recipient_user_id)))
+        await task.set({
+            "status": "responded",
+            "response": action_key,
+            "response_label": action_key,
+            "responded_by": notif.recipient_user_id,
+            "responded_at": datetime.now(UTC),
+        })
+
+    # Reprendre l'exécution du flow en arrière-plan
+    engine = FlowEngine()
+    t = asyncio.create_task(engine.resume(execution_id, action_key))
+    register_execution(execution_id, t)
+
+    return NotificationActionStatus.ACCEPTED
+
+
+from app.features.notifications.service import register_action_handler
+register_action_handler("flow_approval", _handle_flow_approval)
