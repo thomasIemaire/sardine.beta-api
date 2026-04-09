@@ -93,6 +93,24 @@ async def _flow_purge_loop() -> None:
         await asyncio.sleep(24 * 3600)
 
 
+async def _agent_purge_loop() -> None:
+    """
+    Tâche de fond qui purge les agents en corbeille
+    dont la rétention de 30 jours est expirée. S'exécute toutes les 24h.
+    """
+    from app.features.agents.service import purge_expired_agent_trash
+
+    while True:
+        try:
+            count = await purge_expired_agent_trash(days=30)
+            if count > 0:
+                logger.info("Agent trash purge completed: %d agents removed", count)
+        except Exception:
+            logger.exception("Error during agent trash purge")
+
+        await asyncio.sleep(24 * 3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """
@@ -107,6 +125,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     notif_purge_task = asyncio.create_task(_notification_purge_loop())
     file_purge_task = asyncio.create_task(_file_purge_loop())
     flow_purge_task = asyncio.create_task(_flow_purge_loop())
+    agent_purge_task = asyncio.create_task(_agent_purge_loop())
 
     yield
 
@@ -115,7 +134,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     notif_purge_task.cancel()
     file_purge_task.cancel()
     flow_purge_task.cancel()
-    for task in (purge_task, notif_purge_task, file_purge_task, flow_purge_task):
+    agent_purge_task.cancel()
+    for task in (purge_task, notif_purge_task, file_purge_task, flow_purge_task, agent_purge_task):
         try:
             await task
         except asyncio.CancelledError:

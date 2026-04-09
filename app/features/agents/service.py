@@ -17,13 +17,15 @@ from app.features.agents.models import Agent, AgentShare, AgentVersion
 from app.features.auth.models import User
 
 
-async def _get_agent_for_org(agent_id: str, org_id: str) -> Agent:
+async def _get_agent_for_org(agent_id: str, org_id: str, include_deleted: bool = False) -> Agent:
     """Récupère un agent et vérifie qu'il appartient à l'organisation."""
     agent = await Agent.get(PydanticObjectId(agent_id))
     if not agent:
         raise NotFoundError("Agent non trouvé")
     if str(agent.organization_id) != org_id:
         raise NotFoundError("Agent non trouvé dans cette organisation")
+    if not include_deleted and agent.deleted_at is not None:
+        raise NotFoundError("Agent non trouvé")
     return agent
 
 
@@ -91,6 +93,7 @@ async def list_agents(
 
     query = Agent.find(
         Agent.organization_id == PydanticObjectId(org_id),
+        {"deleted_at": None},
         filters,
     )
     return await paginate(query, page, page_size, sort_field=sort_field)
@@ -137,13 +140,60 @@ async def update_agent(
 
 
 async def delete_agent(user: User, org_id: str, agent_id: str) -> None:
-    """Supprime un agent et toutes ses versions."""
+    """Déplace un agent dans la corbeille (suppression douce)."""
     await check_org_membership(user, org_id)
     agent = await _get_agent_for_org(agent_id, org_id)
+    await agent.set({"deleted_at": datetime.now(UTC), "updated_at": datetime.now(UTC)})
 
-    # Suppression cascade des versions
+
+async def list_trashed_agents(user: User, org_id: str) -> list[Agent]:
+    """Liste les agents en corbeille de l'organisation."""
+    await check_org_membership(user, org_id)
+    return await Agent.find(
+        Agent.organization_id == PydanticObjectId(org_id),
+        {"deleted_at": {"$ne": None}},
+    ).sort("-deleted_at").to_list()
+
+
+async def restore_agent(user: User, org_id: str, agent_id: str) -> Agent:
+    """Restaure un agent depuis la corbeille."""
+    await check_org_membership(user, org_id)
+    agent = await _get_agent_for_org(agent_id, org_id, include_deleted=True)
+    if agent.deleted_at is None:
+        raise ValidationError("Cet agent n'est pas en corbeille")
+    await agent.set({"deleted_at": None, "updated_at": datetime.now(UTC)})
+    return agent
+
+
+async def purge_agent(user: User, org_id: str, agent_id: str) -> None:
+    """Supprime définitivement un agent en corbeille et toutes ses versions."""
+    await check_org_membership(user, org_id)
+    agent = await _get_agent_for_org(agent_id, org_id, include_deleted=True)
+    if agent.deleted_at is None:
+        raise ValidationError("Cet agent n'est pas en corbeille")
     await AgentVersion.find(AgentVersion.agent_id == agent.id).delete()
+    await AgentShare.find(AgentShare.agent_id == agent.id).delete()
     await agent.delete()
+
+
+async def purge_expired_agent_trash(days: int = 30) -> int:
+    """
+    Supprime définitivement les agents en corbeille depuis plus de `days` jours.
+    Appelé par la tâche de fond périodique.
+    """
+    from datetime import timedelta
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    expired = await Agent.find(
+        {"deleted_at": {"$ne": None, "$lt": cutoff}}
+    ).to_list()
+
+    count = 0
+    for agent in expired:
+        await AgentVersion.find(AgentVersion.agent_id == agent.id).delete()
+        await AgentShare.find(AgentShare.agent_id == agent.id).delete()
+        await agent.delete()
+        count += 1
+    return count
 
 
 # ─── Versioning ──────────────────────────────────────────────────
