@@ -12,6 +12,7 @@ from .http_node import execute_http
 from .if_node import execute_if
 from .merge import execute_merge
 from .notification import execute_notification
+from .save_file import execute_save_file
 from .start import execute_start
 from .subflow import execute_subflow
 from .switch import execute_switch
@@ -33,6 +34,7 @@ NODE_REGISTRY = {
     "flow": execute_subflow,
     "classification": execute_classification,
     "determination": execute_determination,
+    "save_file": execute_save_file,
     "container": execute_agent,
     "agent": execute_agent,
 }
