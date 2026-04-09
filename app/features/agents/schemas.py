@@ -89,11 +89,13 @@ class AgentRead(BaseModel):
     created_by: str
     created_by_name: str | None = None
     created_at: datetime
+    used_in_flows: bool = False
 
     @classmethod
     def from_agent(
         cls, agent, active_schema: dict | None = None,
         creator_name: str | None = None,
+        used_in_flows: bool = False,
     ) -> "AgentRead":
         return cls(
             id=str(agent.id),
@@ -114,6 +116,7 @@ class AgentRead(BaseModel):
             created_by=str(agent.created_by),
             created_by_name=creator_name,
             created_at=agent.created_at,
+            used_in_flows=used_in_flows,
         )
 
 

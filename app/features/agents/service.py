@@ -29,6 +29,55 @@ async def _get_agent_for_org(agent_id: str, org_id: str, include_deleted: bool =
     return agent
 
 
+async def get_used_agent_ids(org_id: str) -> set[str]:
+    """
+    Retourne l'ensemble des IDs d'agents référencés dans les flows actifs
+    de l'organisation. Cherche les clés 'agentId' et 'agent_id' dans flow_data.
+    """
+    import re
+    from app.features.flows.models import Flow, FlowVersion
+
+    # Récupérer toutes les versions actives des flows non supprimés de l'org
+    flows = await Flow.find(
+        Flow.organization_id == PydanticObjectId(org_id),
+        {"deleted_at": None},
+        {"active_version_id": {"$ne": None}},
+    ).to_list()
+
+    version_ids = [f.active_version_id for f in flows if f.active_version_id]
+    if not version_ids:
+        return set()
+
+    versions = await FlowVersion.find(
+        {"_id": {"$in": version_ids}}
+    ).to_list()
+
+    used: set[str] = set()
+    pattern = re.compile(r'^[a-f0-9]{24}$')
+
+    def _extract(data):
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key in ("agentId", "agent_id") and isinstance(value, str) and pattern.match(value):
+                    used.add(value)
+                elif key == "agents" and isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str) and pattern.match(item):
+                            used.add(item)
+                        elif isinstance(item, dict):
+                            _extract(item)
+                else:
+                    _extract(value)
+        elif isinstance(data, list):
+            for item in data:
+                _extract(item)
+
+    for version in versions:
+        _extract(version.flow_data)
+
+    return used
+
+
 # ─── CRUD Agent ──────────────────────────────────────────────────
 
 async def create_agent(

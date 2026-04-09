@@ -4,6 +4,8 @@ Toutes les routes nécessitent une authentification
 et l'appartenance à l'organisation.
 """
 
+import asyncio
+
 from fastapi import APIRouter, Query, UploadFile
 
 from app.features.agents.schemas import (
@@ -25,6 +27,7 @@ from app.features.agents.service import (
     fork_agent,
     get_agent,
     get_shared_agent,
+    get_used_agent_ids,
     get_version,
     get_version_history,
     import_agent,
@@ -83,10 +86,17 @@ async def list_all(
         creator=creator, origin=origin,
         created_from=created_from, created_to=created_to,
     )
-    names = await get_user_names_map([a.created_by for a in result.items])
+    names, used_ids = await asyncio.gather(
+        get_user_names_map([a.created_by for a in result.items]),
+        get_used_agent_ids(org_id),
+    )
     return {
         "items": [
-            AgentRead.from_agent(a, creator_name=names.get(str(a.created_by)))
+            AgentRead.from_agent(
+                a,
+                creator_name=names.get(str(a.created_by)),
+                used_in_flows=str(a.id) in used_ids,
+            )
             for a in result.items
         ],
         "total": result.total,

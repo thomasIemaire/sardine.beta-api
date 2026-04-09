@@ -595,6 +595,18 @@ async def list_trash_files(org_id: str) -> list[File]:
 
 # ─── Purge & nettoyage ───────────────────────────────────────────
 
+async def purge_file(user: User, org_id: str, file_id: str) -> None:
+    """Supprime définitivement un fichier en corbeille (irréversible)."""
+    file_doc = await File.get(PydanticObjectId(file_id))
+    if not file_doc:
+        raise NotFoundError("Fichier non trouvé")
+    if str(file_doc.organization_id) != org_id:
+        raise NotFoundError("Fichier non trouvé dans cette organisation")
+    if file_doc.deleted_at is None:
+        raise ValidationError("Ce fichier n'est pas en corbeille")
+    await _permanently_delete_file(file_doc)
+
+
 async def purge_expired_file_trash() -> int:
     """Suppression definitive des fichiers dont la retention de 30j est expiree."""
     cutoff = datetime.now(UTC) - timedelta(days=RETENTION_DAYS)

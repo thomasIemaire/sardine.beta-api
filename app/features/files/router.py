@@ -27,6 +27,7 @@ from app.features.files.service import (
     list_trash_files,
     list_versions,
     move_file,
+    purge_file,
     rename_file,
     restore_file,
     restore_version,
@@ -255,6 +256,15 @@ async def restore_from_trash(
     """Restaurer un fichier depuis la corbeille."""
     f = await restore_file(current_user, org_id, file_id)
     return FileRead.from_file(f)
+
+
+@router.delete("/{file_id}/purge", response_model=MessageResponse)
+async def purge_file_route(
+    org_id: str, file_id: str, current_user: CurrentUser,
+):
+    """Supprimer définitivement un fichier en corbeille (irréversible)."""
+    await purge_file(current_user, org_id, file_id)
+    return MessageResponse(message="Fichier supprimé définitivement")
 
 
 # ─── Commentaires ────────────────────────────────────────────────
