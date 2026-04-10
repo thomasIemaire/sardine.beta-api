@@ -246,13 +246,26 @@ async def execute_agent(
     if not full_text:
         return NodeResult(error="Agent: aucun texte OCR disponible dans determinationResult")
 
-    # 4. Construire le schéma LLM combiné
+    # 4. Construire le schéma LLM combiné (tous agents fusionnés pour l'appel GPU)
     llm_schema: dict = {}
     key_to_path: dict[str, tuple[str, ...]] = {}
     key_to_reqs: dict[str, list[dict]] = {}
     field_descriptions: list[str] = []
+    # Mapping dot_key → agent_id pour la provenance
+    agent_field_keys: dict[str, list[str]] = {}  # agent_id → [dot_keys]
 
     for a in agents_data:
+        agent_keys: list[str] = []
+        agent_llm_schema: dict = {}
+        agent_key_to_path: dict = {}
+        agent_key_to_reqs: dict = {}
+        agent_field_desc: list[str] = []
+        _build_llm_schema(
+            a["schema"], agent_llm_schema, agent_key_to_path, agent_key_to_reqs, agent_field_desc,
+        )
+        agent_keys = list(agent_key_to_path.keys())
+        agent_field_keys[a["id"]] = agent_keys
+        # Fusionner dans le schéma global
         _build_llm_schema(
             a["schema"], llm_schema, key_to_path, key_to_reqs, field_descriptions,
         )
@@ -287,8 +300,6 @@ async def execute_agent(
     if isinstance(llm_result, dict):
         _assemble(llm_result, merged)
 
-    set_value(context.data, "agentResults", merged)
-
     # 7. Validation des requirements
     validation_errors = _collect_validation_errors(merged, key_to_path, key_to_reqs)
     filled, total = _count_leaves(merged)
@@ -301,6 +312,29 @@ async def execute_agent(
                 "validation_errors": validation_errors,
             },
         )
+
+    # 8. Structurer agentResults par agent : [{ agentId, agentName, fields }]
+    def _extract_fields_for_agent(dot_keys: list[str], merged: dict) -> dict:
+        """Extrait uniquement les champs appartenant à cet agent depuis merged."""
+        result = {}
+        for dot_key in dot_keys:
+            path = key_to_path.get(dot_key)
+            if not path:
+                continue
+            value = _get_nested(merged, path)
+            _set_nested(result, path, value)
+        return result
+
+    agent_results = [
+        {
+            "agentId": a["id"],
+            "agentName": a["name"],
+            "fields": _extract_fields_for_agent(agent_field_keys.get(a["id"], []), merged),
+        }
+        for a in agents_data
+    ]
+
+    set_value(context.data, "agentResults", agent_results)
 
     return NodeResult(
         output_port=0,
