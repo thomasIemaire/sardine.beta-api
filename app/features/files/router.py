@@ -13,6 +13,7 @@ from app.features.files.schemas import (
     BulkDeleteRequest,
     BulkDeleteResult,
     FileDetailRead,
+    FileExecutionResultsUpdate,
     FileMove,
     FileRead,
     FileRename,
@@ -33,6 +34,7 @@ from app.features.files.service import (
     restore_file,
     restore_version,
     soft_delete_file,
+    update_execution_results,
     upload_file,
     upload_files,
     upload_new_version,
@@ -129,6 +131,18 @@ async def get_detail(
 
 
 # ─── US-FILE-04 : Renommer ──────────────────────────────────────
+
+@router.patch("/{file_id}/execution-results", response_model=FileRead)
+async def update_execution_results_route(
+    org_id: str, file_id: str,
+    payload: FileExecutionResultsUpdate, current_user: CurrentUser,
+):
+    """Mettre à jour les résultats d'exécution d'un fichier."""
+    f = await update_execution_results(
+        current_user, org_id, file_id, payload.flow_execution_results,
+    )
+    return FileRead.from_file(f)
+
 
 @router.patch("/{file_id}/rename", response_model=FileRead)
 async def rename(

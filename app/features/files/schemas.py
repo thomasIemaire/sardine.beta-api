@@ -23,6 +23,12 @@ class FileMove(BaseModel):
     target_folder_id: str
 
 
+class FileExecutionResultsUpdate(BaseModel):
+    """Mise à jour des résultats d'exécution d'un fichier."""
+
+    flow_execution_results: dict
+
+
 # ─── Reponses ────────────────────────────────────────────────────
 
 class FileRead(BaseModel):

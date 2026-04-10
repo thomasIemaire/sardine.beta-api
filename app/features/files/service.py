@@ -167,6 +167,19 @@ async def upload_files(
     return {"success": success, "errors": errors}
 
 
+async def update_execution_results(
+    user: User, org_id: str, file_id: str, results: dict,
+) -> File:
+    """Met à jour les résultats d'exécution d'un fichier."""
+    file_doc = await _get_file(file_id, org_id)
+    await check_folder_access(str(user.id), str(file_doc.folder_id), require_write=True)
+    await file_doc.set({
+        "flow_execution_results": results,
+        "updated_at": datetime.now(UTC),
+    })
+    return file_doc
+
+
 # ─── US-FILE-04 : Renommer un fichier ────────────────────────────
 
 async def rename_file(

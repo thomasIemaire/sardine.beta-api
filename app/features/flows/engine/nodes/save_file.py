@@ -3,15 +3,22 @@ Nœud save_file — sauvegarde le fichier en cours de traitement dans les dossie
 
 Config attendu :
   {
-    "path": "/factures/2024/"   // chemin relatif depuis la racine org
+    "path": "/factures/2024/",      // chemin relatif depuis la racine org
+    "saveFields": [                 // champs de context.data à sauvegarder dans le résultat
+      "data.agentResult",
+      "data.extractedData",
+      "data.fileName"
+    ]
   }
 
-  - Le chemin est découpé en segments (ex: ["factures", "2024"]).
-  - Les dossiers manquants sont créés automatiquement.
-  - Si "path" est vide ou absent, le fichier est rangé à la racine.
+  - "path" : découpé en segments, dossiers manquants créés automatiquement.
+  - "saveFields" : liste de chemins en notation pointée depuis la racine du contexte.
+      Préfixe "data."  → context.data["agentResult"]
+      Si omis ou vide → rien n'est sauvegardé dans flow_execution_results.
+      "fileBase64" est toujours exclu même si explicitement listé.
 
 Lit   : context.data["fileBase64"], context.data["fileName"], context.data["fileMimeType"]
-Écrit : context.data["savedFile"] = { "fileId", "folderId", "path", "name" }
+Écrit : context.data["savedFile"] = { "fileId", "folderId", "path", "name", "size", "mimeType" }
 
 1 port de sortie : 0 (succès ou erreur propagée).
 """
@@ -91,11 +98,35 @@ async def _resolve_duplicate_name(name: str, folder_id: PydanticObjectId) -> str
             return f"{stem}_flow{suffix}"
 
 
+def _resolve_save_fields(save_fields: list[str], context: ExecutionContext) -> dict | None:
+    """
+    Construit le dict des résultats à sauvegarder selon la config saveFields.
+    Chaque entrée est un chemin pointé : "data.agentResult", "data.extractedData", etc.
+    Retourne None si saveFields est vide.
+    """
+    if not save_fields:
+        return None
+
+    result = {}
+    for field_path in save_fields:
+        parts = field_path.split(".", 1)
+        if len(parts) != 2 or parts[0] != "data":
+            continue
+        key = parts[1]
+        if key == "fileBase64":
+            continue
+        if key in context.data:
+            result[key] = context.data[key]
+
+    return result if result else None
+
+
 async def execute_save_file(
     node: dict, context: ExecutionContext, engine,
 ) -> NodeResult:
     config = node.get("config", {})
     raw_path = config.get("path", "")
+    save_fields: list[str] = config.get("saveFields", [])
 
     # Récupérer les données du fichier depuis le contexte
     file_b64 = context.data.get("fileBase64")
@@ -134,11 +165,8 @@ async def execute_save_file(
     # Gérer les doublons de nom
     resolved_name = await _resolve_duplicate_name(file_name, target_folder.id)
 
-    # Copier les résultats d'exécution dans le fichier (sans fileBase64 — redondant et volumineux)
-    execution_results = {
-        k: v for k, v in context.data.items()
-        if k not in ("fileBase64",)
-    }
+    # Résoudre les champs à sauvegarder selon la config saveFields
+    execution_results = _resolve_save_fields(save_fields, context)
 
     # Créer le document File en base
     uploaded_by_oid = PydanticObjectId(triggered_by) if triggered_by else PydanticObjectId()
