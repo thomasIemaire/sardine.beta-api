@@ -12,6 +12,8 @@ from app.features.auth.schemas import MessageResponse
 from app.features.files.schemas import (
     BulkDeleteRequest,
     BulkDeleteResult,
+    FileDetailRead,
+    FileExecutionResultsUpdate,
     FileMove,
     FileRead,
     FileRename,
@@ -32,6 +34,7 @@ from app.features.files.service import (
     restore_file,
     restore_version,
     soft_delete_file,
+    update_execution_results,
     upload_file,
     upload_files,
     upload_new_version,
@@ -114,16 +117,32 @@ async def list_files(
 
 # ─── US-FILE-10 : Detail / previsualisation ─────────────────────
 
-@router.get("/{file_id}", response_model=FileRead)
+@router.get("/{file_id}", response_model=FileDetailRead)
 async def get_detail(
     org_id: str, file_id: str, current_user: CurrentUser,
+    version_id: str | None = Query(None),
 ):
-    """Detail d'un fichier avec metadonnees (lecture suffit)."""
-    f = await get_file_detail(current_user, org_id, file_id)
-    return FileRead.from_file(f)
+    """
+    Détail d'un fichier avec son contenu encodé en base64 pour affichage.
+    Si version_id est fourni, retourne cette version spécifique.
+    """
+    f, b64, mime = await get_file_detail(current_user, org_id, file_id, version_id)
+    return FileDetailRead.from_file_with_content(f, b64, mime)
 
 
 # ─── US-FILE-04 : Renommer ──────────────────────────────────────
+
+@router.patch("/{file_id}/execution-results", response_model=FileRead)
+async def update_execution_results_route(
+    org_id: str, file_id: str,
+    payload: FileExecutionResultsUpdate, current_user: CurrentUser,
+):
+    """Mettre à jour les résultats d'exécution d'un fichier."""
+    f = await update_execution_results(
+        current_user, org_id, file_id, payload.flow_execution_results,
+    )
+    return FileRead.from_file(f)
+
 
 @router.patch("/{file_id}/rename", response_model=FileRead)
 async def rename(

@@ -6,6 +6,7 @@ et l'appartenance à l'organisation.
 
 import asyncio
 
+from beanie import PydanticObjectId
 from fastapi import APIRouter, Query, UploadFile
 
 from app.features.agents.schemas import (
@@ -17,6 +18,8 @@ from app.features.agents.schemas import (
     AgentUpdate,
     AgentVersionCreate,
     AgentVersionRead,
+    FieldFeedbackRead,
+    FieldFeedbackSubmit,
 )
 from app.features.agents.service import (
     create_agent,
@@ -26,6 +29,8 @@ from app.features.agents.service import (
     export_shared_agent,
     fork_agent,
     get_agent,
+    get_agent_stats,
+    get_file_feedbacks,
     get_shared_agent,
     get_used_agent_ids,
     get_version,
@@ -39,6 +44,7 @@ from app.features.agents.service import (
     purge_agent,
     restore_agent,
     share_agent,
+    submit_field_feedback,
     switch_active_version,
     unshare_agent,
     update_agent,
@@ -415,3 +421,39 @@ async def import_agent_route(
         agent, active_schema=version.schema_data,
         creator_name=names.get(str(agent.created_by)),
     )
+
+
+# ─── Feedback & statistiques ─────────────────────────────────────
+
+@router.post("/{agent_id}/feedback", response_model=list[FieldFeedbackRead], status_code=201)
+async def submit_feedback(
+    org_id: str, agent_id: str,
+    payload: FieldFeedbackSubmit, current_user: CurrentUser,
+):
+    """
+    Soumettre des feedbacks sur les champs extraits par un agent pour un fichier.
+    Si un feedback existe déjà pour ce champ+fichier, il est remplacé.
+    """
+    feedbacks = await submit_field_feedback(
+        current_user, org_id, agent_id,
+        payload.file_id,
+        [fb.model_dump() for fb in payload.feedbacks],
+    )
+    return [FieldFeedbackRead.from_feedback(fb) for fb in feedbacks]
+
+
+@router.get("/{agent_id}/stats")
+async def agent_stats(org_id: str, agent_id: str, current_user: CurrentUser):
+    """Statistiques de précision d'un agent (global + par champ)."""
+    return await get_agent_stats(current_user, org_id, agent_id)
+
+
+@router.get("/{agent_id}/feedback", response_model=list[FieldFeedbackRead])
+async def list_feedback(org_id: str, agent_id: str, current_user: CurrentUser):
+    """Liste tous les feedbacks soumis pour un agent."""
+    from app.features.agents.models import AgentFieldFeedback
+    feedbacks = await AgentFieldFeedback.find({
+        "agent_id": PydanticObjectId(agent_id),
+        "organization_id": PydanticObjectId(org_id),
+    }).to_list()
+    return [FieldFeedbackRead.from_feedback(fb) for fb in feedbacks]

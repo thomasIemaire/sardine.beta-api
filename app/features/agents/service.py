@@ -13,7 +13,7 @@ from beanie import PydanticObjectId
 
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.core.membership import check_org_membership
-from app.features.agents.models import Agent, AgentShare, AgentVersion
+from app.features.agents.models import Agent, AgentFieldFeedback, AgentShare, AgentVersion
 from app.features.auth.models import User
 
 
@@ -223,6 +223,115 @@ async def purge_agent(user: User, org_id: str, agent_id: str) -> None:
     await AgentVersion.find(AgentVersion.agent_id == agent.id).delete()
     await AgentShare.find(AgentShare.agent_id == agent.id).delete()
     await agent.delete()
+
+
+# ─── Feedback & statistiques ─────────────────────────────────────
+
+async def submit_field_feedback(
+    user: User,
+    org_id: str,
+    agent_id: str,
+    file_id: str,
+    feedbacks: list[dict],  # [{ "fieldKey": "seller.name", "fieldValue": "ACME", "isCorrect": true }]
+) -> list[AgentFieldFeedback]:
+    """
+    Soumet des feedbacks sur les champs extraits par un agent.
+    Un feedback par champ. Si un feedback existe déjà pour ce fichier+champ+agent, il est remplacé.
+    """
+    await check_org_membership(user, org_id)
+    agent = await _get_agent_for_org(agent_id, org_id)
+
+    results = []
+    for fb in feedbacks:
+        field_key = fb.get("fieldKey", "").strip()
+        if not field_key:
+            continue
+
+        # Remplacer un feedback existant pour ce triplet agent/file/champ
+        existing = await AgentFieldFeedback.find_one({
+            "agent_id": agent.id,
+            "file_id": PydanticObjectId(file_id),
+            "field_key": field_key,
+        })
+        if existing:
+            await existing.set({
+                "is_correct": bool(fb.get("isCorrect")),
+                "field_value": fb.get("fieldValue"),
+                "rated_by": user.id,
+            })
+            results.append(existing)
+        else:
+            doc = AgentFieldFeedback(
+                agent_id=agent.id,
+                organization_id=PydanticObjectId(org_id),
+                file_id=PydanticObjectId(file_id),
+                field_key=field_key,
+                field_value=fb.get("fieldValue"),
+                is_correct=bool(fb.get("isCorrect")),
+                rated_by=user.id,
+            )
+            await doc.insert()
+            results.append(doc)
+
+    return results
+
+
+async def get_agent_stats(user: User, org_id: str, agent_id: str) -> dict:
+    """
+    Calcule les statistiques de précision d'un agent.
+    Retourne le taux global et le détail par champ.
+    """
+    await check_org_membership(user, org_id)
+    agent = await _get_agent_for_org(agent_id, org_id)
+
+    feedbacks = await AgentFieldFeedback.find({
+        "agent_id": agent.id,
+        "organization_id": PydanticObjectId(org_id),
+    }).to_list()
+
+    if not feedbacks:
+        return {
+            "total_ratings": 0,
+            "correct": 0,
+            "incorrect": 0,
+            "accuracy_rate": None,
+            "per_field": {},
+        }
+
+    per_field: dict[str, dict] = {}
+    for fb in feedbacks:
+        fk = fb.field_key
+        if fk not in per_field:
+            per_field[fk] = {"total": 0, "correct": 0}
+        per_field[fk]["total"] += 1
+        if fb.is_correct:
+            per_field[fk]["correct"] += 1
+
+    for fk, s in per_field.items():
+        s["incorrect"] = s["total"] - s["correct"]
+        s["accuracy_rate"] = round(s["correct"] / s["total"], 4) if s["total"] else None
+
+    total = len(feedbacks)
+    correct = sum(1 for fb in feedbacks if fb.is_correct)
+
+    return {
+        "total_ratings": total,
+        "correct": correct,
+        "incorrect": total - correct,
+        "accuracy_rate": round(correct / total, 4) if total else None,
+        "per_field": per_field,
+    }
+
+
+async def get_file_feedbacks(
+    user: User, org_id: str, file_id: str,
+) -> list[AgentFieldFeedback]:
+    """Retourne tous les feedbacks soumis pour un fichier donné."""
+    await check_org_membership(user, org_id)
+    return await AgentFieldFeedback.find({
+        "organization_id": PydanticObjectId(org_id),
+        "file_id": PydanticObjectId(file_id),
+    }).to_list()
 
 
 async def purge_expired_agent_trash(days: int = 30) -> int:

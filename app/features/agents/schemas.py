@@ -120,6 +120,44 @@ class AgentRead(BaseModel):
         )
 
 
+class FieldFeedbackItem(BaseModel):
+    """Un feedback sur un champ extrait."""
+    fieldKey: str
+    fieldValue: str | None = None
+    isCorrect: bool
+
+
+class FieldFeedbackSubmit(BaseModel):
+    """Soumission de feedbacks sur les champs d'un agent pour un fichier."""
+    file_id: str
+    feedbacks: list[FieldFeedbackItem]
+
+
+class FieldFeedbackRead(BaseModel):
+    """Lecture d'un feedback."""
+    id: str
+    agent_id: str
+    file_id: str
+    field_key: str
+    field_value: str | None
+    is_correct: bool
+    rated_by: str
+    created_at: datetime
+
+    @classmethod
+    def from_feedback(cls, fb) -> "FieldFeedbackRead":
+        return cls(
+            id=str(fb.id),
+            agent_id=str(fb.agent_id),
+            file_id=str(fb.file_id),
+            field_key=fb.field_key,
+            field_value=fb.field_value,
+            is_correct=fb.is_correct,
+            rated_by=str(fb.rated_by),
+            created_at=fb.created_at,
+        )
+
+
 class AgentShareRead(BaseModel):
     """Lecture d'un partage d'agent."""
 

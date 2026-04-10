@@ -32,6 +32,9 @@ class File(Document):
     # Auteur du dépôt initial
     uploaded_by: PydanticObjectId
 
+    # Résultats d'exécution copiés (renseigné si créé par un nœud save_file)
+    flow_execution_results: dict | None = None
+
     # Soft delete (même pattern que Folder)
     deleted_at: datetime | None = None
     original_folder_id: PydanticObjectId | None = None

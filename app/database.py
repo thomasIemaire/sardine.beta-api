@@ -20,7 +20,7 @@ async def init_db() -> None:
     """
     # Import de tous les models pour que Beanie les enregistre
     from app.features.api_keys.models import ApiKey
-    from app.features.agents.models import Agent, AgentShare, AgentVersion
+    from app.features.agents.models import Agent, AgentFieldFeedback, AgentShare, AgentVersion
     from app.features.audit.models import AuditLog
     from app.features.auth.models import TokenBlacklist, User
     from app.features.files.comments import FileComment
@@ -55,6 +55,7 @@ async def init_db() -> None:
             Agent,
             AgentVersion,
             AgentShare,
+            AgentFieldFeedback,
             Flow,
             FlowVersion,
             FlowShare,

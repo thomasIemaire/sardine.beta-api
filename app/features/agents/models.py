@@ -62,6 +62,29 @@ class AgentVersion(Document):
         name = "agent_versions"
 
 
+class AgentFieldFeedback(Document):
+    """
+    Feedback utilisateur sur un champ extrait par un agent.
+    Alimente les statistiques de précision par agent et par champ.
+    """
+
+    agent_id: Indexed(PydanticObjectId)
+    organization_id: Indexed(PydanticObjectId)
+
+    # Source du feedback
+    file_id: PydanticObjectId  # fichier dont vient le champ évalué
+    field_key: str             # chemin pointé du champ (ex: "seller.name")
+    field_value: str | None    # valeur extraite au moment du feedback (snapshot)
+
+    is_correct: bool           # true = bonne valeur, false = mauvaise valeur
+
+    rated_by: PydanticObjectId
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    class Settings:
+        name = "agent_field_feedbacks"
+
+
 class AgentShare(Document):
     """
     Partage d'un agent en lecture seule avec une organisation.
