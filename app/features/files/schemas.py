@@ -26,7 +26,7 @@ class FileMove(BaseModel):
 # ─── Reponses ────────────────────────────────────────────────────
 
 class FileRead(BaseModel):
-    """Lecture d'un fichier."""
+    """Lecture d'un fichier (liste, sans contenu)."""
 
     id: str
     name: str
@@ -54,6 +54,33 @@ class FileRead(BaseModel):
             created_at=f.created_at,
             updated_at=f.updated_at,
             flow_execution_results=getattr(f, "flow_execution_results", None),
+        )
+
+
+class FileDetailRead(FileRead):
+    """Lecture détaillée d'un fichier avec son contenu encodé en base64."""
+
+    content_base64: str
+    content_mime_type: str
+
+    @classmethod
+    def from_file_with_content(
+        cls, f, content_base64: str, content_mime_type: str,
+    ) -> "FileDetailRead":
+        return cls(
+            id=str(f.id),
+            name=f.name,
+            folder_id=str(f.folder_id),
+            organization_id=str(f.organization_id),
+            current_version=f.current_version,
+            mime_type=f.mime_type,
+            size=f.size,
+            uploaded_by=str(f.uploaded_by),
+            created_at=f.created_at,
+            updated_at=f.updated_at,
+            flow_execution_results=getattr(f, "flow_execution_results", None),
+            content_base64=content_base64,
+            content_mime_type=content_mime_type,
         )
 
 

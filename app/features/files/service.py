@@ -497,11 +497,38 @@ async def bulk_delete(
 
 async def get_file_detail(
     user: User, org_id: str, file_id: str,
-) -> File:
-    """Detail d'un fichier (lecture suffit)."""
+    version_id: str | None = None,
+) -> tuple[File, str, str]:
+    """
+    Retourne (file_doc, base64_content, mime_type) pour affichage frontend.
+    Si version_id est fourni, lit cette version spécifique.
+    Sinon, lit la version courante.
+    """
+    import base64
+
     file_doc = await _get_file(file_id, org_id)
     await check_folder_access(str(user.id), str(file_doc.folder_id))
-    return file_doc
+
+    if version_id:
+        version = await FileVersion.get(PydanticObjectId(version_id))
+        if not version or str(version.file_id) != str(file_doc.id):
+            raise NotFoundError("Version non trouvée")
+    else:
+        version = await FileVersion.find_one(
+            FileVersion.file_id == file_doc.id,
+            FileVersion.version_number == file_doc.current_version,
+        )
+        if not version:
+            raise NotFoundError("Version courante introuvable")
+
+    full = _full_path(version.storage_path)
+    if not full.exists():
+        raise NotFoundError("Fichier physique introuvable")
+
+    content = full.read_bytes()
+    b64 = base64.b64encode(content).decode("utf-8")
+
+    return file_doc, b64, version.mime_type or file_doc.mime_type
 
 
 async def get_download_path(
