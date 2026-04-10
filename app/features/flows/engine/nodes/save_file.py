@@ -134,6 +134,12 @@ async def execute_save_file(
     # Gérer les doublons de nom
     resolved_name = await _resolve_duplicate_name(file_name, target_folder.id)
 
+    # Copier les résultats d'exécution dans le fichier (sans fileBase64 — redondant et volumineux)
+    execution_results = {
+        k: v for k, v in context.data.items()
+        if k not in ("fileBase64",)
+    }
+
     # Créer le document File en base
     uploaded_by_oid = PydanticObjectId(triggered_by) if triggered_by else PydanticObjectId()
     file_doc = File(
@@ -144,6 +150,7 @@ async def execute_save_file(
         mime_type=file_mime,
         size=len(content),
         uploaded_by=uploaded_by_oid,
+        flow_execution_results=execution_results,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )

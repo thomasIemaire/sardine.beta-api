@@ -38,6 +38,7 @@ class FileRead(BaseModel):
     uploaded_by: str
     created_at: datetime
     updated_at: datetime
+    flow_execution_results: dict | None = None
 
     @classmethod
     def from_file(cls, f) -> "FileRead":
@@ -52,6 +53,7 @@ class FileRead(BaseModel):
             uploaded_by=str(f.uploaded_by),
             created_at=f.created_at,
             updated_at=f.updated_at,
+            flow_execution_results=getattr(f, "flow_execution_results", None),
         )
 
 
