@@ -775,58 +775,23 @@ async def import_flow(
     subflows_data = data.get("subflows", [])
 
     # ── 1. Importer les agents manquants ─────────────────────────
-
-    def _scan_agent_name_to_id(data) -> dict[str, str]:
-        """
-        Parcourt récursivement flow_data pour extraire les paires agentName → agentId.
-        Gère le format single ({ agentId, agentName } au même niveau)
-        et le format liste ({ agents: [{ agentId, agentName }] }).
-        """
-        mapping: dict[str, str] = {}
-        if isinstance(data, dict):
-            aid = data.get("agentId") or data.get("agent_id")
-            name = data.get("agentName")
-            if aid and name:
-                mapping[name] = aid
-            for value in data.values():
-                mapping.update(_scan_agent_name_to_id(value))
-        elif isinstance(data, list):
-            for item in data:
-                mapping.update(_scan_agent_name_to_id(item))
-        return mapping
-
-    # Construire le mapping agentName → old_agentId en scannant tous les flow_data
-    # (flow principal + subflows) — fallback si le champ "id" est absent de l'export
-    all_flow_datas = [flow_data] + [
-        sf.get("flow_data", {}) for sf in subflows_data if isinstance(sf, dict)
-    ]
-    name_to_old_id: dict[str, str] = {}
-    for fd in all_flow_datas:
-        name_to_old_id.update(_scan_agent_name_to_id(fd))
-
     agent_id_map: dict[str, str] = {}  # old_id -> new_id
     for agent_data in agents_data:
         if not isinstance(agent_data, dict) or "name" not in agent_data:
             continue
-        agent_name = agent_data["name"]
-        # Priorité : champ "id" exporté → sinon on retrouve l'old_id depuis le flow_data
-        old_id = agent_data.get("id") or name_to_old_id.get(agent_name)
         try:
             existing_agent = await Agent.find_one(
-                Agent.name == agent_name,
+                Agent.name == agent_data["name"],
                 Agent.organization_id == PydanticObjectId(org_id),
                 {"deleted_at": None},
             )
             if existing_agent:
-                new_id = str(existing_agent.id)
+                agent_id_map[agent_data.get("id", agent_data["name"])] = str(existing_agent.id)
             else:
                 agent, _ = await import_agent(user, org_id, agent_data)
-                new_id = str(agent.id)
-            if old_id:
-                agent_id_map[old_id] = new_id
-            print(f"[IMPORT] ✓ agent {agent_name!r} : {old_id!r} → {new_id!r}")
+                agent_id_map[agent_data.get("id", agent_data["name"])] = str(agent.id)
         except Exception as exc:
-            print(f"[IMPORT] ✗ erreur agent {agent_name!r} : {exc!r}")
+            print(f"[IMPORT] ✗ erreur agent {agent_data.get('name')!r} : {exc!r}")
 
     def _update_agent_refs(d):
         """Remplace récursivement tous les agentId/agent_id selon agent_id_map."""
