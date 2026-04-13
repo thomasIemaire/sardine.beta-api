@@ -621,32 +621,32 @@ def _update_flow_id_refs(data: dict | list, flow_id_map: dict) -> None:
 def _extract_agent_ids(data: dict | list | str | int | float | bool | None) -> set[str]:
     """
     Extrait récursivement tous les IDs d'agents référencés dans flow_data.
-    Recherche les clés "agent_id", "agents", ou toute valeur string qui ressemble à un ObjectId MongoDB (24 caractères hex).
+    Recherche les clés "agentId" (camelCase) et "agent_id" (snake_case),
+    ainsi que les objets dans les listes "agents".
     """
     import re
 
     agent_ids = set()
+    pattern = re.compile(r'^[a-f0-9]{24}$')
 
     if isinstance(data, dict):
         for key, value in data.items():
-            if key in ("agent_id", "agents"):
-                if isinstance(value, str):
-                    agent_ids.add(value)
-                elif isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, str):
-                            agent_ids.add(item)
-            elif isinstance(value, str) and re.match(r'^[a-f0-9]{24}$', value):
-                # Ajout automatique des strings qui ressemblent à des ObjectIds
+            if key in ("agentId", "agent_id") and isinstance(value, str) and pattern.match(value):
                 agent_ids.add(value)
+            elif key == "agents" and isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str) and pattern.match(item):
+                        agent_ids.add(item)
+                    elif isinstance(item, dict):
+                        # Format {"agentId": "...", "agentName": "..."}
+                        aid = item.get("agentId") or item.get("agent_id")
+                        if aid and isinstance(aid, str) and pattern.match(aid):
+                            agent_ids.add(aid)
             else:
                 agent_ids.update(_extract_agent_ids(value))
     elif isinstance(data, list):
         for item in data:
-            if isinstance(item, str) and re.match(r'^[a-f0-9]{24}$', item):
-                agent_ids.add(item)
-            else:
-                agent_ids.update(_extract_agent_ids(item))
+            agent_ids.update(_extract_agent_ids(item))
 
     return agent_ids
 
@@ -668,21 +668,28 @@ async def export_flow(user: User, org_id: str, flow_id: str) -> dict:
     if not version:
         raise ValidationError("Version active introuvable")
 
-    # Extraire les agents référencés
-    agent_ids = _extract_agent_ids(version.flow_data)
-    agents = []
-    for agent_id in agent_ids:
-        try:
-            agent_data = await export_agent(user, org_id, agent_id)
-            agents.append(agent_data)
-        except (NotFoundError, ValidationError):
-            pass
-
     # Exporter les subflows récursivement (visited initialisé avec le flow courant
     # pour couper toute boucle : un flow ne peut pas se référencer lui-même)
     subflows = await _export_subflows_recursive(
         org_id, version.flow_data, visited={flow_id}
     )
+
+    # Extraire les agents du flow principal ET de tous les sous-flows
+    all_agent_ids = _extract_agent_ids(version.flow_data)
+    for sf in subflows:
+        all_agent_ids.update(_extract_agent_ids(sf.get("flow_data", {})))
+
+    agents = []
+    seen_agent_ids: set[str] = set()
+    for agent_id in all_agent_ids:
+        if agent_id in seen_agent_ids:
+            continue
+        seen_agent_ids.add(agent_id)
+        try:
+            agent_data = await export_agent(user, org_id, agent_id)
+            agents.append(agent_data)
+        except (NotFoundError, ValidationError):
+            pass
 
     return {
         "name": flow.name,
@@ -708,20 +715,27 @@ async def export_shared_flow(user: User, org_id: str, flow_id: str) -> dict:
     if not flow_data:
         raise ValidationError("Le flow partagé n'a pas de données actives")
 
-    # Extraire les agents référencés
-    agent_ids = _extract_agent_ids(flow_data)
+    # Exporter les subflows récursivement
+    subflows = await _export_subflows_recursive(
+        org_id, flow_data, visited={str(flow.id)}
+    )
+
+    # Extraire les agents du flow principal ET de tous les sous-flows
+    all_agent_ids = _extract_agent_ids(flow_data)
+    for sf in subflows:
+        all_agent_ids.update(_extract_agent_ids(sf.get("flow_data", {})))
+
     agents = []
-    for agent_id in agent_ids:
+    seen_agent_ids: set[str] = set()
+    for agent_id in all_agent_ids:
+        if agent_id in seen_agent_ids:
+            continue
+        seen_agent_ids.add(agent_id)
         try:
             agent_data = await export_shared_agent(user, org_id, agent_id)
             agents.append(agent_data)
         except (NotFoundError, ValidationError):
             pass
-
-    # Exporter les subflows récursivement
-    subflows = await _export_subflows_recursive(
-        org_id, flow_data, visited={str(flow.id)}
-    )
 
     return {
         "name": flow.name,
@@ -769,6 +783,7 @@ async def import_flow(
             existing_agent = await Agent.find_one(
                 Agent.name == agent_data["name"],
                 Agent.organization_id == PydanticObjectId(org_id),
+                {"deleted_at": None},
             )
             if existing_agent:
                 agent_id_map[agent_data.get("id", agent_data["name"])] = str(existing_agent.id)
@@ -779,12 +794,12 @@ async def import_flow(
             print(f"[IMPORT] ✗ erreur agent {agent_data.get('name')!r} : {exc!r}")
 
     def _update_agent_refs(d):
+        """Remplace récursivement tous les agentId/agent_id selon agent_id_map."""
         if isinstance(d, dict):
-            for key, value in d.items():
-                if key == "agent_id" and isinstance(value, str) and value in agent_id_map:
+            for key in list(d.keys()):
+                value = d[key]
+                if key in ("agent_id", "agentId") and isinstance(value, str) and value in agent_id_map:
                     d[key] = agent_id_map[value]
-                elif key == "agents" and isinstance(value, list):
-                    d[key] = [agent_id_map.get(item, item) if isinstance(item, str) else item for item in value]
                 else:
                     _update_agent_refs(value)
         elif isinstance(d, list):
@@ -814,6 +829,7 @@ async def import_flow(
             existing_sf = await Flow.find_one(
                 Flow.name == sf_name,
                 Flow.organization_id == PydanticObjectId(org_id),
+                {"deleted_at": None},
             )
             if existing_sf:
                 # Déjà présent : on mappe l'ancien ID vers l'existant
