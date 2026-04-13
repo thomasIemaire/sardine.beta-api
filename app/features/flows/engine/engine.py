@@ -80,10 +80,16 @@ def _node_name(node: dict) -> str:
 
 
 def _deep_merge(base: dict, overlay: dict) -> None:
-    """Deep merge overlay → base. Les feuilles d'overlay gagnent."""
+    """Deep merge overlay → base.
+    - dict + dict : récursion
+    - list + list : concaténation (pour agentResults multi-branches)
+    - sinon : overlay gagne
+    """
     for key, val in overlay.items():
         if key in base and isinstance(base[key], dict) and isinstance(val, dict):
             _deep_merge(base[key], val)
+        elif key in base and isinstance(base[key], list) and isinstance(val, list):
+            base[key] = base[key] + val
         else:
             base[key] = val
 
