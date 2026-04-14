@@ -730,6 +730,7 @@ async def export_agent(user: User, org_id: str, agent_id: str) -> dict:
         raise ValidationError("Version active introuvable")
 
     return {
+        "id": str(agent.id),
         "name": agent.name,
         "description": agent.description,
         "schema_data": version.schema_data,
@@ -749,6 +750,7 @@ async def export_shared_agent(user: User, org_id: str, agent_id: str) -> dict:
         raise ValidationError("L'agent partagé n'a pas de schéma actif")
 
     return {
+        "id": str(agent.id),
         "name": agent.name,
         "description": agent.description,
         "schema_data": schema,

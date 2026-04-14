@@ -334,7 +334,13 @@ async def execute_agent(
         for a in agents_data
     ]
 
-    set_value(context.data, "agentResults", agent_results)
+    # Accumule dans agentExtractions (plusieurs nœuds agents peuvent s'enchaîner)
+    existing = context.data.get("agentExtractions")
+    if isinstance(existing, list):
+        existing.extend(agent_results)
+        set_value(context.data, "agentExtractions", existing)
+    else:
+        set_value(context.data, "agentExtractions", agent_results)
 
     return NodeResult(
         output_port=0,

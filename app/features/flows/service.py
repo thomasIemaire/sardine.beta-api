@@ -550,203 +550,276 @@ async def fork_flow(
     return forked_flow, forked_version
 
 
-# ─── Export/Import ───────────────────────────────────────────────
+# ─── Duplication ─────────────────────────────────────────────────
 
-def _extract_subflow_ids(flow_data: dict) -> set[str]:
-    """Extrait les flowId référencés dans les noeuds de type 'flow'."""
-    ids = set()
-    for node in flow_data.get("nodes", []):
-        if node.get("type") == "flow":
-            fid = node.get("config", {}).get("flowId", "").strip()
-            if fid:
-                ids.add(fid)
-    return ids
-
-
-async def _export_subflows_recursive(
-    org_id: str,
-    flow_data: dict,
-    visited: set[str],
-) -> list[dict]:
+async def duplicate_flow(
+    user: User, org_id: str, flow_id: str,
+) -> tuple[Flow, FlowVersion]:
     """
-    Exporte récursivement tous les subflows référencés dans flow_data.
-    visited contient les flow_ids déjà traités — protège contre les cycles.
-    Retourne une liste ordonnée : parent avant ses enfants.
+    Duplique un flow : copie le flow_data de la version active
+    dans un nouveau flow nommé '<nom> (copie)'.
     """
-    result = []
-    for sfid in _extract_subflow_ids(flow_data):
-        if sfid in visited:
-            continue
-        visited.add(sfid)
-
-        try:
-            sf = await Flow.get(PydanticObjectId(sfid))
-            if not sf or str(sf.organization_id) != org_id:
-                continue
-            if not sf.active_version_id:
-                continue
-            sf_version = await FlowVersion.get(sf.active_version_id)
-            if not sf_version:
-                continue
-
-            # Descendre d'abord dans les enfants du subflow
-            nested = await _export_subflows_recursive(org_id, sf_version.flow_data, visited)
-
-            result.append({
-                "id": sfid,
-                "name": sf.name,
-                "description": sf.description,
-                "flow_data": sf_version.flow_data,
-            })
-            result.extend(nested)
-        except Exception:
-            pass
-
-    return result
-
-
-def _update_flow_id_refs(data: dict | list, flow_id_map: dict) -> None:
-    """Remplace récursivement les flowId dans flow_data selon le mapping old→new."""
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if key == "flowId" and isinstance(value, str) and value in flow_id_map:
-                data[key] = flow_id_map[value]
-            else:
-                _update_flow_id_refs(value, flow_id_map)
-    elif isinstance(data, list):
-        for item in data:
-            _update_flow_id_refs(item, flow_id_map)
-
-
-def _extract_agent_ids(data: dict | list | str | int | float | bool | None) -> set[str]:
-    """
-    Extrait récursivement tous les IDs d'agents référencés dans flow_data.
-    Recherche les clés "agent_id", "agents", ou toute valeur string qui ressemble à un ObjectId MongoDB (24 caractères hex).
-    """
-    import re
-
-    agent_ids = set()
-
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if key in ("agent_id", "agents"):
-                if isinstance(value, str):
-                    agent_ids.add(value)
-                elif isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, str):
-                            agent_ids.add(item)
-            elif isinstance(value, str) and re.match(r'^[a-f0-9]{24}$', value):
-                # Ajout automatique des strings qui ressemblent à des ObjectIds
-                agent_ids.add(value)
-            else:
-                agent_ids.update(_extract_agent_ids(value))
-    elif isinstance(data, list):
-        for item in data:
-            if isinstance(item, str) and re.match(r'^[a-f0-9]{24}$', item):
-                agent_ids.add(item)
-            else:
-                agent_ids.update(_extract_agent_ids(item))
-
-    return agent_ids
-
-
-async def export_flow(user: User, org_id: str, flow_id: str) -> dict:
-    """
-    Exporte un flow au format JSON pour téléchargement.
-    Inclut les métadonnées, flow_data, et les agents référencés.
-    """
-    from app.features.agents.service import export_agent
-
     await check_org_membership(user, org_id)
     flow = await _get_flow_for_org(flow_id, org_id)
 
     if not flow.active_version_id:
         raise ValidationError("Le flow n'a pas de version active")
-
     version = await FlowVersion.get(flow.active_version_id)
     if not version:
         raise ValidationError("Version active introuvable")
 
-    # Extraire les agents référencés
-    agent_ids = _extract_agent_ids(version.flow_data)
-    agents = []
-    for agent_id in agent_ids:
-        try:
-            agent_data = await export_agent(user, org_id, agent_id)
-            agents.append(agent_data)
-        except (NotFoundError, ValidationError):
-            pass
-
-    # Exporter les subflows récursivement (visited initialisé avec le flow courant
-    # pour couper toute boucle : un flow ne peut pas se référencer lui-même)
-    subflows = await _export_subflows_recursive(
-        org_id, version.flow_data, visited={flow_id}
+    import copy
+    return await create_flow(
+        user, org_id,
+        name=f"{flow.name} (copie)",
+        flow_data=copy.deepcopy(version.flow_data),
+        description=flow.description,
     )
+
+
+# ─── Export/Import ───────────────────────────────────────────────
+#
+# Format d'export v2 : arbre auto-contenu, aucun ID externe.
+#
+# Chaque nœud agent embarque le contenu complet de l'agent :
+#   config.agents[i].agentData = { name, description, schema_data }
+#
+# Chaque nœud sous-flow embarque le flow complet récursivement :
+#   config.flowData  = { name, description, nodes, links, … }
+#   config.flowName  = nom du sous-flow (pour find-or-create)
+#   config.flowDescription = description
+#
+# À l'import on reconstruit les IDs réels en base (find-or-create)
+# et on les réinjecte dans les nœuds.
+
+
+async def _fetch_agent_data(org_id: str, agent_id: str) -> dict | None:
+    """Récupère name/description/schema_data d'un agent pour l'embarquer dans l'export."""
+    from app.features.agents.models import Agent, AgentVersion
+    try:
+        agent = await Agent.get(PydanticObjectId(agent_id))
+        if not agent or str(agent.organization_id) != org_id or not agent.active_version_id:
+            return None
+        version = await AgentVersion.get(agent.active_version_id)
+        if not version:
+            return None
+        return {
+            "name": agent.name,
+            "description": agent.description,
+            "schema_data": version.schema_data,
+        }
+    except Exception:
+        return None
+
+
+async def _embed_tree(org_id: str, flow_data: dict, visited_flows: set[str]) -> dict:
+    """
+    Retourne une copie profonde de flow_data où :
+    - les agentId sont remplacés par agentData (contenu complet)
+    - les flowId sont remplacés par flowData (sous-arbre récursif)
+    """
+    import copy
+    data = copy.deepcopy(flow_data)
+
+    for node in data.get("nodes", []):
+        node_type = node.get("type", "")
+        config = node.setdefault("config", {})
+
+        # ── Nœuds agent / container ──────────────────────────────
+        if node_type in ("agent", "container"):
+            agents_list = config.get("agents")
+            if isinstance(agents_list, list):
+                for entry in agents_list:
+                    aid = entry.get("agentId") or entry.get("agent_id")
+                    if not aid:
+                        continue
+                    agent_data = await _fetch_agent_data(org_id, aid)
+                    if agent_data:
+                        entry.pop("agentId", None)
+                        entry.pop("agent_id", None)
+                        entry.pop("version", None)
+                        entry["agentData"] = agent_data
+
+            # Format single agentId au niveau config
+            single_id = config.get("agentId") or config.get("agent_id")
+            if single_id:
+                agent_data = await _fetch_agent_data(org_id, single_id)
+                if agent_data:
+                    config.pop("agentId", None)
+                    config.pop("agent_id", None)
+                    config.pop("version", None)
+                    config["agentData"] = agent_data
+
+        # ── Nœuds sous-flow ──────────────────────────────────────
+        elif node_type == "flow":
+            flow_id = config.get("flowId", "").strip()
+            if not flow_id or flow_id in visited_flows:
+                continue
+            visited_flows.add(flow_id)
+            try:
+                sf = await Flow.get(PydanticObjectId(flow_id))
+                if not sf or str(sf.organization_id) != org_id or not sf.active_version_id:
+                    continue
+                sf_version = await FlowVersion.get(sf.active_version_id)
+                if not sf_version:
+                    continue
+                embedded = await _embed_tree(org_id, sf_version.flow_data, visited_flows)
+                config.pop("flowId", None)
+                config["flowName"] = sf.name
+                config["flowDescription"] = sf.description
+                config["flowData"] = embedded
+            except Exception:
+                pass
+
+    return data
+
+
+async def _resolve_tree(
+    user: User,
+    org_id: str,
+    flow_data: dict,
+    created_flows: list,
+) -> dict:
+    """
+    Parcourt flow_data (format v2 embarqué) et :
+    - résout chaque agentData → find-or-create agent → réinjecte agentId
+    - résout chaque flowData → find-or-create sous-flow récursif → réinjecte flowId
+    Modifie flow_data en place et retourne-le.
+    """
+    from app.features.agents.models import Agent
+    from app.features.agents.service import create_agent
+
+    for node in flow_data.get("nodes", []):
+        node_type = node.get("type", "")
+        config = node.get("config", {})
+
+        # ── Nœuds agent / container ──────────────────────────────
+        if node_type in ("agent", "container"):
+            agents_list = config.get("agents")
+            if isinstance(agents_list, list):
+                for entry in agents_list:
+                    agent_data = entry.pop("agentData", None)
+                    if not isinstance(agent_data, dict) or "name" not in agent_data:
+                        continue
+                    agent_id = await _find_or_create_agent(user, org_id, agent_data)
+                    entry["agentId"] = agent_id
+                    entry.setdefault("agentName", agent_data["name"])
+
+            # Format single
+            single_data = config.pop("agentData", None)
+            if isinstance(single_data, dict) and "name" in single_data:
+                agent_id = await _find_or_create_agent(user, org_id, single_data)
+                config["agentId"] = agent_id
+                config.setdefault("agentName", single_data["name"])
+
+        # ── Nœuds sous-flow ──────────────────────────────────────
+        elif node_type == "flow":
+            sf_name = config.pop("flowName", None)
+            sf_description = config.pop("flowDescription", "")
+            sf_flow_data = config.pop("flowData", None)
+
+            if not sf_name or not isinstance(sf_flow_data, dict):
+                continue
+
+            # Résoudre récursivement d'abord les enfants
+            await _resolve_tree(user, org_id, sf_flow_data, created_flows)
+
+            existing_sf = await Flow.find_one(
+                Flow.name == sf_name,
+                Flow.organization_id == PydanticObjectId(org_id),
+                {"deleted_at": None},
+            )
+            if existing_sf:
+                print(f"[IMPORT] ✓ sous-flow existant : {sf_name!r} → {existing_sf.id}")
+                config["flowId"] = str(existing_sf.id)
+            else:
+                new_sf, new_sf_version = await create_flow(
+                    user, org_id, sf_name, sf_flow_data, sf_description,
+                )
+                created_flows.append((new_sf, new_sf_version))
+                print(f"[IMPORT] ✓ sous-flow créé : {sf_name!r} → {new_sf.id}")
+                config["flowId"] = str(new_sf.id)
+
+    return flow_data
+
+
+async def _find_or_create_agent(user: User, org_id: str, agent_data: dict) -> str:
+    """Cherche un agent par nom dans l'org ; le crée s'il n'existe pas."""
+    from app.features.agents.models import Agent
+    from app.features.agents.service import create_agent
+
+    name = agent_data.get("name", "")
+    schema_data = agent_data.get("schema_data", {})
+    description = agent_data.get("description", "")
+
+    existing = await Agent.find_one(
+        Agent.name == name,
+        Agent.organization_id == PydanticObjectId(org_id),
+        {"deleted_at": None},
+    )
+    if existing:
+        print(f"[IMPORT] ✓ agent existant : {name!r} → {existing.id}")
+        return str(existing.id)
+
+    agent, _ = await create_agent(user, org_id, name, schema_data, description)
+    print(f"[IMPORT] ✓ agent créé : {name!r} → {agent.id}")
+    return str(agent.id)
+
+
+async def export_flow(user: User, org_id: str, flow_id: str) -> dict:
+    """
+    Exporte un flow au format arbre auto-contenu (v2).
+    Aucun ID externe : agents et sous-flows sont embarqués inline.
+    """
+    await check_org_membership(user, org_id)
+    flow = await _get_flow_for_org(flow_id, org_id)
+
+    if not flow.active_version_id:
+        raise ValidationError("Le flow n'a pas de version active")
+    version = await FlowVersion.get(flow.active_version_id)
+    if not version:
+        raise ValidationError("Version active introuvable")
+
+    embedded = await _embed_tree(org_id, version.flow_data, visited_flows={flow_id})
 
     return {
         "name": flow.name,
         "description": flow.description,
         "status": flow.status,
-        "flow_data": version.flow_data,
-        "agents": agents,
-        "subflows": subflows,
+        "flow_data": embedded,
         "exported_at": datetime.now(UTC).isoformat(),
-        "version": "1.0",
+        "version": "2.0",
     }
 
 
 async def export_shared_flow(user: User, org_id: str, flow_id: str) -> dict:
-    """
-    Exporte un flow partagé au format JSON.
-    Même logique que export_flow, mais pour les flows partagés.
-    """
-    from app.features.agents.service import export_shared_agent
-
+    """Exporte un flow partagé au format arbre auto-contenu (v2)."""
     flow, flow_data = await get_shared_flow(user, org_id, flow_id)
 
     if not flow_data:
         raise ValidationError("Le flow partagé n'a pas de données actives")
 
-    # Extraire les agents référencés
-    agent_ids = _extract_agent_ids(flow_data)
-    agents = []
-    for agent_id in agent_ids:
-        try:
-            agent_data = await export_shared_agent(user, org_id, agent_id)
-            agents.append(agent_data)
-        except (NotFoundError, ValidationError):
-            pass
-
-    # Exporter les subflows récursivement
-    subflows = await _export_subflows_recursive(
-        org_id, flow_data, visited={str(flow.id)}
-    )
+    embedded = await _embed_tree(org_id, flow_data, visited_flows={str(flow.id)})
 
     return {
         "name": flow.name,
         "description": flow.description,
         "status": flow.status,
-        "flow_data": flow_data,
-        "agents": agents,
-        "subflows": subflows,
+        "flow_data": embedded,
         "exported_at": datetime.now(UTC).isoformat(),
-        "version": "1.0",
+        "version": "2.0",
     }
 
 
 async def import_flow(
     user: User, org_id: str, data: dict,
-) -> tuple[Flow, FlowVersion]:
+) -> list[tuple[Flow, FlowVersion]]:
     """
-    Importe un flow depuis un JSON exporté.
-    Crée les agents manquants, puis le flow avec sa version initiale.
+    Importe un flow depuis un JSON exporté (format v2 arbre auto-contenu).
+    Crée récursivement agents et sous-flows manquants, puis le flow principal.
     """
-    from app.features.agents.service import import_agent
-
     await check_org_membership(user, org_id)
 
-    # Validation basique
     if not isinstance(data, dict):
         raise ValidationError("Format JSON invalide")
     if "name" not in data or not isinstance(data["name"], str):
@@ -754,98 +827,20 @@ async def import_flow(
     if "flow_data" not in data or not isinstance(data["flow_data"], dict):
         raise ValidationError("Données du flow manquantes ou invalides")
 
+    import copy
     name = data["name"]
     description = data.get("description", "")
-    flow_data = data["flow_data"]
-    agents_data = data.get("agents", [])
-    subflows_data = data.get("subflows", [])
+    flow_data = copy.deepcopy(data["flow_data"])
 
-    # ── 1. Importer les agents manquants ─────────────────────────
-    agent_id_map: dict[str, str] = {}  # old_id -> new_id
-    for agent_data in agents_data:
-        if not isinstance(agent_data, dict) or "name" not in agent_data:
-            continue
-        try:
-            existing_agent = await Agent.find_one(
-                Agent.name == agent_data["name"],
-                Agent.organization_id == PydanticObjectId(org_id),
-            )
-            if existing_agent:
-                agent_id_map[agent_data.get("id", agent_data["name"])] = str(existing_agent.id)
-            else:
-                agent, _ = await import_agent(user, org_id, agent_data)
-                agent_id_map[agent_data.get("id", agent_data["name"])] = str(agent.id)
-        except Exception as exc:
-            print(f"[IMPORT] ✗ erreur agent {agent_data.get('name')!r} : {exc!r}")
-
-    def _update_agent_refs(d):
-        if isinstance(d, dict):
-            for key, value in d.items():
-                if key == "agent_id" and isinstance(value, str) and value in agent_id_map:
-                    d[key] = agent_id_map[value]
-                elif key == "agents" and isinstance(value, list):
-                    d[key] = [agent_id_map.get(item, item) if isinstance(item, str) else item for item in value]
-                else:
-                    _update_agent_refs(value)
-        elif isinstance(d, list):
-            for item in d:
-                _update_agent_refs(item)
-
-    # ── 2. Importer les subflows en ordre inverse (feuilles d'abord) ──
-    # L'export produit [sous-flow1, sous-flow2, sous-flow3, apro].
-    # reversed() → [apro, sous-flow3, sous-flow2, sous-flow1]
-    # Chaque feuille est créée avant que son parent soit traité,
-    # donc flow_id_map est complet au moment de la mise à jour des refs.
-    flow_id_map: dict[str, str] = {}     # old_id → new_id
+    # Résoudre récursivement l'arbre (agents + sous-flows)
     created_subflows: list[tuple[Flow, FlowVersion]] = []
+    await _resolve_tree(user, org_id, flow_data, created_subflows)
 
-    print(f"[IMPORT] subflows à traiter : {len(subflows_data)}")
-    for sf_data in reversed(subflows_data):
-        if not isinstance(sf_data, dict) or "name" not in sf_data:
-            print(f"[IMPORT] ⚠ subflow ignoré (format invalide) : {sf_data!r}")
-            continue
-        old_id = sf_data.get("id", "")
-        sf_name = sf_data["name"]
-        sf_description = sf_data.get("description", "")
-        sf_flow_data = sf_data.get("flow_data", {})
-
-        print(f"[IMPORT] → traitement subflow : {sf_name!r} (old_id={old_id!r})")
-        try:
-            existing_sf = await Flow.find_one(
-                Flow.name == sf_name,
-                Flow.organization_id == PydanticObjectId(org_id),
-            )
-            if existing_sf:
-                # Déjà présent : on mappe l'ancien ID vers l'existant
-                print(f"[IMPORT] ✓ subflow existant : {sf_name!r} → {existing_sf.id}")
-                if old_id:
-                    flow_id_map[old_id] = str(existing_sf.id)
-            else:
-                # Résoudre les refs agents + subflows déjà créés, puis créer
-                _update_agent_refs(sf_flow_data)
-                _update_flow_id_refs(sf_flow_data, flow_id_map)
-                new_sf, new_sf_version = await create_flow(
-                    user, org_id, sf_name, sf_flow_data, sf_description,
-                )
-                if old_id:
-                    flow_id_map[old_id] = str(new_sf.id)
-                created_subflows.append((new_sf, new_sf_version))
-                print(f"[IMPORT] ✓ subflow créé : {sf_name!r} → {new_sf.id}")
-        except Exception as exc:
-            print(f"[IMPORT] ✗ erreur subflow {sf_name!r} : {exc!r}")
-
-    # ── 3. Mettre à jour flow_data principal ─────────────────────
-    _update_agent_refs(flow_data)
-    _update_flow_id_refs(flow_data, flow_id_map)
-
-    # ── 4. Créer le flow principal ────────────────────────────────
+    # Créer le flow principal
     print(f"[IMPORT] → création flow principal : {name!r}")
     main_flow, main_version = await create_flow(user, org_id, name, flow_data, description)
     print(f"[IMPORT] ✓ flow principal créé : {name!r} → {main_flow.id}")
 
-    # ── 5. Retourner tous les flows créés (subflows + principal) ──
-    # Les subflows sont retournés dans l'ordre naturel (parent avant enfant)
-    # pour faciliter l'affichage côté frontend.
-    all_created = list(reversed(created_subflows)) + [(main_flow, main_version)]
+    all_created = created_subflows + [(main_flow, main_version)]
     print(f"[IMPORT] ✓ total flows créés : {len(all_created)}")
     return all_created

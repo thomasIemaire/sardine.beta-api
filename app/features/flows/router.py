@@ -23,6 +23,7 @@ from app.features.flows.service import (
     create_flow,
     create_version,
     delete_flow,
+    duplicate_flow,
     export_flow,
     export_shared_flow,
     fork_flow,
@@ -177,6 +178,17 @@ async def update(
     names = await get_user_names_map([flow.created_by])
     return FlowRead.from_flow(
         flow, creator_name=names.get(str(flow.created_by)),
+    )
+
+
+@router.post("/{flow_id}/duplicate", response_model=FlowRead, status_code=201)
+async def duplicate(org_id: str, flow_id: str, current_user: CurrentUser):
+    """Duplique un flow (copie du flow_data de la version active)."""
+    flow, version = await duplicate_flow(current_user, org_id, flow_id)
+    names = await get_user_names_map([flow.created_by])
+    return FlowRead.from_flow(
+        flow, active_data=version.flow_data,
+        creator_name=names.get(str(flow.created_by)),
     )
 
 
