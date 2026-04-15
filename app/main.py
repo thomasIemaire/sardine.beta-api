@@ -148,7 +148,46 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
+    swagger_ui_parameters={"persistAuthorization": True},
+    openapi_tags=[],
 )
+
+
+# Surcharge du schéma OpenAPI pour exposer les deux méthodes d'auth dans Swagger
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {})
+    schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Token JWT obtenu via POST /api/auth/login",
+        },
+        "ApiKeyAuth": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "Clé API (ex: srd_xxxx...)",
+        },
+    }
+    # Appliquer les deux schémas sur toutes les routes (OR : l'un ou l'autre suffit)
+    for path in schema.get("paths", {}).values():
+        for operation in path.values():
+            if isinstance(operation, dict):
+                operation["security"] = [{"BearerAuth": []}, {"ApiKeyAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+app.openapi = custom_openapi
 
 # CORS — à restreindre en production avec les origines spécifiques
 app.add_middleware(

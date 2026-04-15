@@ -32,11 +32,18 @@ async def get_current_user(
     auth_header = request.headers.get("Authorization", "")
 
     # ─── Schéma ApiKey ───────────────────────────────────────
-    if auth_header.startswith("ApiKey "):
-        api_token = auth_header[7:]  # len("ApiKey ") == 7
-        if not api_token:
-            raise UnauthorizedError("Clé API manquante")
+    # Supporte deux formes :
+    #   - Header X-API-Key: srd_xxx       (Swagger UI, valeur brute)
+    #   - Authorization: ApiKey srd_xxx   (rétrocompatibilité)
+    x_api_key = request.headers.get("X-API-Key", "")
+    if x_api_key:
+        api_token = x_api_key
+    elif auth_header.startswith("ApiKey "):
+        api_token = auth_header[7:]
+    else:
+        api_token = ""
 
+    if api_token:
         from app.features.api_keys.service import authenticate_api_key
 
         result = await authenticate_api_key(api_token)
@@ -45,12 +52,10 @@ async def get_current_user(
 
         api_key, organization = result
 
-        # Charger l'utilisateur qui a créé la clé
         user = await User.get(api_key.created_by)
         if user is None or user.status != Status.ACTIVE:
             raise UnauthorizedError("Utilisateur associé à la clé API introuvable ou désactivé")
 
-        # Stocker la clé et l'organisation sur la requête pour usage ultérieur
         request.state.api_key = api_key
         request.state.api_key_org = organization
         return user
