@@ -205,6 +205,7 @@ storage_dir = Path("storage")
 storage_dir.mkdir(exist_ok=True)
 (storage_dir / "avatars").mkdir(exist_ok=True)
 (storage_dir / "files").mkdir(exist_ok=True)
+(storage_dir / "datasets").mkdir(exist_ok=True)
 from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -234,6 +235,7 @@ app.mount("/storage", NoCacheStaticFiles(_static_app), name="storage")
 
 from app.features.api_keys.router import router as api_keys_router
 from app.features.agents.router import router as agents_router
+from app.features.datasets.router import router as datasets_router
 from app.features.audit.router import router as audit_router
 from app.features.auth.router import router as auth_router
 from app.features.files.router import router as files_router
@@ -263,6 +265,7 @@ app.include_router(tags_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(api_keys_router, prefix="/api")
+app.include_router(datasets_router, prefix="/api")
 
 
 @app.get("/health", tags=["Health"])
