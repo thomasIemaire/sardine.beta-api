@@ -35,5 +35,7 @@ class Settings(BaseSettings):
     BREVO_SENDER_EMAIL: str = "noreply@sardine.app"
     BREVO_SENDER_NAME: str = "Sardine"
 
+    HF_TOKEN: str = ""  # Token d'accès Hugging Face pour les modèles privés
+
 
 settings = Settings()
