@@ -29,17 +29,22 @@ async def classify(
     file_base64: str,
     model_repo: str = "Sendoc/sard-cls",
     model_filename: str = "best.pt",
+    model_version: str | None = None,
 ) -> dict:
     """Appelle POST /classify et retourne la réponse JSON."""
+    payload: dict = {
+        "file_base64": file_base64,
+        "modelRepo": model_repo,
+        "modelFilename": model_filename,
+    }
+    if model_version:
+        payload["modelVersion"] = model_version
+
     async with httpx.AsyncClient(timeout=settings.GPU_API_TIMEOUT) as client:
         response = await client.post(
             f"{_base_url()}/classify",
             headers=_headers(),
-            json={
-                "file_base64": file_base64,
-                "modelRepo": model_repo,
-                "modelFilename": model_filename,
-            },
+            json=payload,
         )
         response.raise_for_status()
         return response.json()

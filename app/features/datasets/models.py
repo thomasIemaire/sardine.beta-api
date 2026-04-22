@@ -65,6 +65,7 @@ class Dataset(Document):
 
     files: list[DatasetFile] = []
     pages: list[DatasetPage] = []
+    custom_classes: list[str] = []
 
     created_by: PydanticObjectId
 

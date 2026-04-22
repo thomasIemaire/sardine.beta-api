@@ -28,6 +28,7 @@ from app.features.datasets.models import (
     DatasetPage,
     DatasetZone,
 )
+from app.features.classifiers.service import get_latest_classifier_classes
 from app.features.organizations.models import Organization
 
 STORAGE_DIR = Path("storage/datasets")
@@ -165,6 +166,55 @@ async def delete_dataset(user: User, org_id: str, dataset_id: str) -> None:
         user.id, "DATASET_DELETE",
         f"Dataset '{dataset.name}' supprimé",
     )
+
+
+# ─── Classes personnalisées ───────────────────────────────────
+
+
+async def add_custom_class(
+    user: User, org_id: str, dataset_id: str, class_name: str,
+) -> Dataset:
+    """Ajoute une classe personnalisée au dataset (ignorée si déjà présente)."""
+    await _assert_org_member(user, org_id)
+    dataset = await _get_dataset(dataset_id, org_id)
+
+    name = class_name.strip()
+    if not name:
+        raise BadRequestError("Le nom de la classe ne peut pas être vide")
+
+    if name not in dataset.custom_classes:
+        await dataset.set({
+            "custom_classes": [*dataset.custom_classes, name],
+            "updated_at": datetime.now(UTC),
+        })
+        await log_action(
+            user.id, "DATASET_CLASS_ADD",
+            f"Classe '{name}' ajoutée au dataset '{dataset.name}'",
+        )
+
+    return dataset
+
+
+async def remove_custom_class(
+    user: User, org_id: str, dataset_id: str, class_name: str,
+) -> Dataset:
+    """Supprime une classe personnalisée du dataset."""
+    await _assert_org_member(user, org_id)
+    dataset = await _get_dataset(dataset_id, org_id)
+
+    name = class_name.strip()
+    if name not in dataset.custom_classes:
+        raise NotFoundError(f"Classe '{name}' introuvable dans ce dataset")
+
+    await dataset.set({
+        "custom_classes": [c for c in dataset.custom_classes if c != name],
+        "updated_at": datetime.now(UTC),
+    })
+    await log_action(
+        user.id, "DATASET_CLASS_REMOVE",
+        f"Classe '{name}' supprimée du dataset '{dataset.name}'",
+    )
+    return dataset
 
 
 # ─── Import de fichiers PDF ───────────────────────────────────
@@ -357,10 +407,17 @@ async def update_page(
     if not page:
         raise NotFoundError("Page not found")
 
-    if document_type is not None and document_type not in VALID_DOCUMENT_TYPES:
-        raise BadRequestError(
-            f"Invalid document_type, allowed: {', '.join(sorted(VALID_DOCUMENT_TYPES))}"
-        )
+    if document_type is not None:
+        try:
+            model_classes = set(await get_latest_classifier_classes())
+        except Exception:
+            model_classes = set(VALID_DOCUMENT_TYPES)  # fallback si HF indisponible
+
+        valid_classes = model_classes | set(dataset.custom_classes)
+        if document_type not in valid_classes:
+            raise BadRequestError(
+                f"Invalid document_type, allowed: {', '.join(sorted(valid_classes))}"
+            )
 
     if processed is not None:
         page.processed = processed

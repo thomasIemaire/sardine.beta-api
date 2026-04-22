@@ -103,15 +103,23 @@ class DatasetSummaryRead(BaseModel):
 
 
 class DatasetDetailRead(BaseModel):
-    """Dataset complet avec fichiers et pages."""
+    """Dataset complet avec fichiers, pages et classes disponibles."""
 
     id: str
     name: str
     status: str
     files: list[FileRead]
     pages: list[PageDetailRead]
+    model_classes: list[str] = []
+    custom_classes: list[str] = []
     created_at: datetime
     updated_at: datetime
+
+
+class CustomClassAdd(BaseModel):
+    """Ajout d'une classe personnalisée au dataset."""
+
+    name: str
 
 
 class ImportResult(BaseModel):

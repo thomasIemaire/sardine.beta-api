@@ -7,7 +7,9 @@ from fastapi import APIRouter, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 
 from app.features.auth.dependencies import CurrentAdmin
+from app.features.classifiers.service import list_classifier_versions
 from app.features.datasets.schemas import (
+    CustomClassAdd,
     DatasetCreate,
     DatasetDetailRead,
     DatasetRename,
@@ -21,6 +23,7 @@ from app.features.datasets.schemas import (
     ZonesReplace,
 )
 from app.features.datasets.service import (
+    add_custom_class,
     create_dataset,
     delete_dataset,
     export_dataset,
@@ -31,6 +34,7 @@ from app.features.datasets.service import (
     import_pdf,
     list_datasets,
     list_pages,
+    remove_custom_class,
     rename_dataset,
     replace_zones,
     update_page,
@@ -83,8 +87,18 @@ async def list_all(org_id: str, current_user: CurrentAdmin):
 
 @router.get("/{dataset_id}")
 async def get_detail(org_id: str, dataset_id: str, current_user: CurrentAdmin):
-    """Détail complet d'un dataset avec fichiers et pages."""
+    """Détail complet d'un dataset avec fichiers, pages et classes disponibles."""
     d = await get_dataset_detail(current_user, org_id, dataset_id)
+
+    # Récupère les classes de la dernière version du modèle (best-effort)
+    model_classes: list[str] = []
+    try:
+        versions = await list_classifier_versions()
+        if versions:
+            model_classes = versions[-1].get("classes", [])
+    except Exception:
+        pass
+
     return DatasetDetailRead(
         id=str(d.id),
         name=d.name,
@@ -120,6 +134,8 @@ async def get_detail(org_id: str, dataset_id: str, current_user: CurrentAdmin):
             )
             for p in d.pages
         ],
+        model_classes=model_classes,
+        custom_classes=d.custom_classes,
         created_at=d.created_at,
         updated_at=d.updated_at,
     )
@@ -349,6 +365,29 @@ async def zones_replace(
             for z in new_zones
         ],
     }
+
+
+# ─── Classes personnalisées ───────────────────────────────────
+
+
+@router.post("/{dataset_id}/custom-classes", status_code=201)
+async def add_class(
+    org_id: str, dataset_id: str,
+    payload: CustomClassAdd, current_user: CurrentAdmin,
+):
+    """Ajouter une classe personnalisée au dataset."""
+    d = await add_custom_class(current_user, org_id, dataset_id, payload.name)
+    return {"custom_classes": d.custom_classes}
+
+
+@router.delete("/{dataset_id}/custom-classes/{class_name}", status_code=200)
+async def remove_class(
+    org_id: str, dataset_id: str,
+    class_name: str, current_user: CurrentAdmin,
+):
+    """Supprimer une classe personnalisée du dataset."""
+    d = await remove_custom_class(current_user, org_id, dataset_id, class_name)
+    return {"custom_classes": d.custom_classes}
 
 
 # ─── Export ────────────────────────────────────────────────────
