@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -35,25 +36,40 @@ async def list_classifier_versions() -> list[dict]:
         for tag in tags:
             tag_name = tag["name"]
 
-            # Read classes.json at this specific revision
-            classes_resp = await client.get(
-                f"{HF_API_BASE}/{REPO_ID}/resolve/{tag_name}/classes.json",
-                headers=headers,
-                follow_redirects=True,
+            # classes.json + commits en parallèle pour ce tag
+            classes_resp, commits_resp = await asyncio.gather(
+                client.get(
+                    f"{HF_API_BASE}/{REPO_ID}/resolve/{tag_name}/classes.json",
+                    headers=headers,
+                    follow_redirects=True,
+                ),
+                client.get(
+                    f"{HF_API_BASE}/api/models/{REPO_ID}/commits/{tag_name}",
+                    headers=headers,
+                ),
             )
 
             classes: list[str] = []
             if classes_resp.status_code == 200:
                 try:
-                    data = classes_resp.json()
-                    classes = data.get("classes", [])
+                    classes = classes_resp.json().get("classes", [])
                 except (json.JSONDecodeError, AttributeError):
+                    pass
+
+            published_at: str | None = None
+            if commits_resp.status_code == 200:
+                try:
+                    commits = commits_resp.json()
+                    if commits:
+                        published_at = commits[0].get("date")
+                except (json.JSONDecodeError, AttributeError, IndexError):
                     pass
 
             results.append({
                 "model": REPO_ID,
                 "version": tag_name,
                 "classes": classes,
+                "published_at": published_at,
             })
 
     return results
