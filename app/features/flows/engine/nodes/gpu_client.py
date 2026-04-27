@@ -50,9 +50,6 @@ async def classify(
         return response.json()
 
 
-_DETERMINATION_BASE_URL = "http://localhost:8008"
-
-
 async def detect(
     file_base64: str,
     model_repo: str = "Sendoc/sard-det",
@@ -62,7 +59,7 @@ async def detect(
     """Appelle POST /detect et retourne la réponse JSON."""
     async with httpx.AsyncClient(timeout=settings.GPU_API_TIMEOUT) as client:
         response = await client.post(
-            f"{_DETERMINATION_BASE_URL}/detect",
+            f"{_base_url()}/detect",
             headers=_headers(),
             json={
                 "file_base64": file_base64,
