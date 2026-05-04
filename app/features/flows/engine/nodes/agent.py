@@ -10,8 +10,11 @@ Config attendu :
   }
 
 Prérequis :
-  - context.data["determinationResult"]["pages"][i]["detections"][j]["text"]
+  - context.data["determinationResult"]["pages"][i]["elements"][j]["content"]
     doit exister (le nœud determination doit avoir tourné avant).
+    Chaque élément a un "type" (table, text, text-column, logo…) et un
+    "content" qui est soit une string, soit une liste de lignes (liste de
+    cellules) pour les tables.
 
 Le schéma de chaque agent (depuis Agent.active_version.schema_data) est une
 structure imbriquée. Trois types de nœud :
@@ -99,6 +102,31 @@ def _clean_value(value: str | None) -> str | None:
     )
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned if cleaned else None
+
+
+def _element_to_text(element: dict) -> str:
+    """Convertit un élément du determinationResult en texte exploitable par le LLM.
+
+    - content string  → renvoyé tel quel (strippé)
+    - content list[list] (table) → lignes jointes par '\\n', cellules par ' | '
+    - autre / vide    → chaîne vide
+    """
+    content = element.get("content")
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        lines = []
+        for row in content:
+            if isinstance(row, list):
+                cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+                if cells:
+                    lines.append(" | ".join(cells))
+            elif row is not None and str(row).strip():
+                lines.append(str(row).strip())
+        return "\n".join(lines)
+    return str(content).strip()
 
 
 # ─── Validation des requirements ─────────────────────────────────
@@ -365,10 +393,12 @@ async def execute_agent(
 
     all_texts = []
     for page in pages:
-        for det in page.get("detections", []):
-            t = det.get("text", "")
-            if isinstance(t, str) and t.strip():
-                all_texts.append(t.strip())
+        for elem in page.get("elements", []):
+            if not isinstance(elem, dict):
+                continue
+            t = _element_to_text(elem)
+            if t:
+                all_texts.append(t)
     full_text = "\n".join(all_texts)
 
     if not full_text:
@@ -376,7 +406,7 @@ async def execute_agent(
             error="Agent: aucun texte OCR disponible dans determinationResult",
             metadata={
                 "pages_count": len(pages),
-                "detections_count": sum(len(p.get("detections", [])) for p in pages),
+                "elements_count": sum(len(p.get("elements", [])) for p in pages),
             },
         )
 
