@@ -120,6 +120,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await init_db()
     logger.info("Database initialized — MongoDB: %s", settings.MONGODB_NAME)
 
+    # Seed du premier serveur monitoré depuis GPU_API_BASE_URL si collection vide
+    from app.features.servers.service import seed_default_server_if_empty
+    await seed_default_server_if_empty()
+
     # Lancement des tâches de fond
     purge_task = asyncio.create_task(_trash_purge_loop())
     notif_purge_task = asyncio.create_task(_notification_purge_loop())
@@ -247,6 +251,7 @@ from app.features.organizations.router import router as organizations_router
 from app.features.files.tags_router import router as tags_router
 from app.features.permissions.router import router as permissions_router
 from app.features.search.router import router as search_router
+from app.features.servers.router import router as servers_router
 from app.features.teams.router import router as teams_router
 from app.features.users.router import router as users_router
 
@@ -266,6 +271,11 @@ app.include_router(search_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(api_keys_router, prefix="/api")
 app.include_router(datasets_router, prefix="/api")
+<<<<<<< Updated upstream
+=======
+app.include_router(classifiers_router, prefix="/api")
+app.include_router(servers_router, prefix="/api")
+>>>>>>> Stashed changes
 
 
 @app.get("/health", tags=["Health"])
