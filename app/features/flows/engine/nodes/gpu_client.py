@@ -92,7 +92,13 @@ async def extract_raw(
                 "max_tokens": max_tokens,
             },
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            body = response.text
+            raise httpx.HTTPStatusError(
+                f"HTTP {response.status_code} sur /extract — body: {body}",
+                request=response.request,
+                response=response,
+            )
         return response.json()
 
 
@@ -114,7 +120,36 @@ _EXTRACT_SYSTEM_PROMPT = (
     "- Applique la même logique récursivement à chaque niveau du schéma. "
     "- Même si tous les attributs feuilles d'un objet sont null, l'objet et ses attributs doivent rester présents dans la réponse. "
     "- Aucun attribut ne doit jamais disparaître du schéma, quelle que soit la situation. "
+    "## Règles sur les tableaux "
+    "- Si la valeur d'un attribut est un tableau JSON, ce tableau contient un unique élément template décrivant la forme attendue de chaque item. "
+    "- Tu dois retourner autant d'éléments que d'occurrences réellement trouvées dans le texte (zéro, un ou plusieurs). "
+    "- Si aucune occurrence n'est trouvée, retourne un tableau vide []. "
+    "- Chaque élément du tableau retourné doit respecter EXACTEMENT la forme du template : mêmes clés, même imbrication, sans attribut en plus, sans attribut en moins. "
+    "- Les feuilles de chaque élément suivent les mêmes règles que les feuilles hors tableau : valeur extraite ou null si absente. "
+    "- Les contraintes 'aucun attribut ne disparaît' et 'pas de renommage' s'appliquent aux clés de chaque élément ; le nombre d'éléments du tableau, lui, est libre. "
 )
+
+
+class ExtractError(RuntimeError):
+    """Erreur d'extraction LLM avec contexte (HTTP, parsing, troncature…).
+
+    Attributs supplémentaires accessibles pour la metadata du nœud :
+      - raw_response : str | None — contenu brut renvoyé par le LLM
+      - request_meta : dict       — taille du prompt, schéma, max_tokens, modèle
+      - kind         : str        — 'http' | 'empty' | 'json' | 'truncated'
+    """
+
+    def __init__(
+        self,
+        message: str,
+        kind: str = "unknown",
+        raw_response: str | None = None,
+        request_meta: dict | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.raw_response = raw_response
+        self.request_meta = request_meta or {}
 
 
 async def extract_structured(
@@ -123,11 +158,12 @@ async def extract_structured(
     field_descriptions: list[str] | None = None,
     model_id: str = "Qwen/Qwen3-8B",
     max_tokens: int = 1024,
-) -> dict | None:
+) -> dict:
     """
     Extrait des données structurées depuis un texte selon un schéma JSON.
     Construit le prompt système + user, appelle /extract, parse la réponse JSON.
-    Retourne None si l'appel ou le parsing échoue.
+    Lève ExtractError (avec contexte) si l'appel HTTP échoue ou si le JSON est
+    invalide.
     """
     import json
 
@@ -141,12 +177,25 @@ async def extract_structured(
         )
     user_prompt = f"Texte: {text}{desc_block}\nSchéma:{schema_str}"
 
+    request_meta = {
+        "model_id": model_id,
+        "max_tokens": max_tokens,
+        "user_prompt_chars": len(user_prompt),
+        "schema_chars": len(schema_str),
+        "ocr_text_chars": len(text),
+        "field_descriptions_count": len(field_descriptions or []),
+    }
+
     try:
         data = await extract_raw(
             _EXTRACT_SYSTEM_PROMPT, user_prompt, model_id, max_tokens,
         )
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ExtractError(
+            f"appel HTTP /extract échoué: {exc}",
+            kind="http",
+            request_meta=request_meta,
+        ) from exc
 
     raw = data.get("response", "")
     clean = (
@@ -156,7 +205,23 @@ async def extract_structured(
         .removesuffix("```")
         .strip()
     )
+    if not clean:
+        raise ExtractError(
+            "réponse LLM vide",
+            kind="empty",
+            raw_response=raw,
+            request_meta=request_meta,
+        )
+
     try:
         return json.loads(clean)
-    except Exception:
-        return None
+    except json.JSONDecodeError as exc:
+        truncated = not clean.rstrip().endswith(("}", "]"))
+        truncated_hint = " (probablement tronqué — augmenter max_tokens)" if truncated else ""
+        raise ExtractError(
+            f"JSON invalide{truncated_hint}: {exc.msg} à pos {exc.pos}.\n"
+            f"--- Body complet ({len(clean)} chars) ---\n{clean}\n--- fin body ---",
+            kind="truncated" if truncated else "json",
+            raw_response=clean,
+            request_meta=request_meta,
+        ) from exc
