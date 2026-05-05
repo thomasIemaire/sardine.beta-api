@@ -271,11 +271,7 @@ app.include_router(search_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(api_keys_router, prefix="/api")
 app.include_router(datasets_router, prefix="/api")
-<<<<<<< Updated upstream
-=======
-app.include_router(classifiers_router, prefix="/api")
 app.include_router(servers_router, prefix="/api")
->>>>>>> Stashed changes
 
 
 @app.get("/health", tags=["Health"])
