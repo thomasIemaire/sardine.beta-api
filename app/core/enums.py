@@ -47,6 +47,20 @@ class NotificationActionStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class ServerType(StrEnum):
+    """Type d'un serveur monitoré."""
+    GPU_RUNPOD = "gpu_runpod"
+    GPU_LOCAL = "gpu_local"
+    CPU_WORKER = "cpu_worker"
+
+
+class ServerHealth(StrEnum):
+    """État de santé d'un serveur lors d'une récupération de stats."""
+    OK = "ok"
+    UNREACHABLE = "unreachable"
+    ERROR = "error"
+
+
 # Labels lisibles pour l'affichage côté client
 USER_ROLE_LABELS = {UserRole.ADMIN: "Administrateur", UserRole.USER: "Utilisateur"}
 STATUS_LABELS = {Status.ACTIVE: "Actif", Status.INACTIVE: "Inactif"}
@@ -64,4 +78,14 @@ NOTIFICATION_ACTION_STATUS_LABELS = {
     NotificationActionStatus.PENDING: "En attente",
     NotificationActionStatus.ACCEPTED: "Acceptée",
     NotificationActionStatus.REJECTED: "Refusée",
+}
+SERVER_TYPE_LABELS = {
+    ServerType.GPU_RUNPOD: "GPU RunPod",
+    ServerType.GPU_LOCAL: "GPU local",
+    ServerType.CPU_WORKER: "Worker CPU",
+}
+SERVER_HEALTH_LABELS = {
+    ServerHealth.OK: "En ligne",
+    ServerHealth.UNREACHABLE: "Injoignable",
+    ServerHealth.ERROR: "Erreur",
 }

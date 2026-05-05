@@ -39,6 +39,7 @@ async def init_db() -> None:
     from app.features.notifications.models import Notification
     from app.features.organizations.models import Organization
     from app.features.permissions.models import FolderMemberPermission, FolderTeamPermission
+    from app.features.servers.models import Server
     from app.features.teams.models import Team, TeamHierarchy, TeamMember
 
     await init_beanie(
@@ -71,5 +72,6 @@ async def init_db() -> None:
             FolderMemberPermission,
             ApiKey,
             Dataset,
+            Server,
         ],
     )
