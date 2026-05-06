@@ -12,3 +12,7 @@ tests/
 *.md
 .vscode/
 .idea/
+storage/
+mongo-init/
+.ruff_cache/
+*.egg-info/
