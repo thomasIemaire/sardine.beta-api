@@ -239,6 +239,7 @@ app.mount("/storage", NoCacheStaticFiles(_static_app), name="storage")
 
 from app.features.api_keys.router import router as api_keys_router
 from app.features.agents.router import router as agents_router
+from app.features.classifiers.router import router as classifiers_router
 from app.features.datasets.router import router as datasets_router
 from app.features.audit.router import router as audit_router
 from app.features.auth.router import router as auth_router
@@ -271,6 +272,7 @@ app.include_router(search_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(api_keys_router, prefix="/api")
 app.include_router(datasets_router, prefix="/api")
+app.include_router(classifiers_router, prefix="/api")
 app.include_router(servers_router, prefix="/api")
 
 

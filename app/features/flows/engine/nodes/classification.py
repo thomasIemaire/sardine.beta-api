@@ -5,7 +5,8 @@ Config attendu :
   {
     "documentClasses": ["facture", "contrat", ...],
     "modelRepo": "Sendoc/sard-cls",       // optionnel
-    "modelFilename": "best.pt"            // optionnel
+    "modelFilename": "best.pt",           // optionnel
+    "modelVersion": "1.0.0"              // optionnel, tag git HuggingFace
   }
 
 2 ports : 0 = "Valide" (top label correspond), 1 = "Invalide".
@@ -41,6 +42,7 @@ async def execute_classification(
 
     model_repo = config.get("modelRepo", "Sendoc/sard-cls")
     model_filename = config.get("modelFilename", "best.pt")
+    model_version = config.get("modelVersion") or None
 
     b64_value = context.data.get("fileBase64")
     if not b64_value or not isinstance(b64_value, str):
@@ -48,7 +50,7 @@ async def execute_classification(
 
     # Appel du serveur GPU
     try:
-        gpu_resp = await gpu_client.classify(b64_value, model_repo, model_filename)
+        gpu_resp = await gpu_client.classify(b64_value, model_repo, model_filename, model_version)
     except Exception as exc:
         return NodeResult(error=f"Classification: erreur serveur GPU — {exc}")
 
