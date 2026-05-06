@@ -450,8 +450,8 @@ async def execute_agent(
 
     # 5. Appel /extract
     # Plus le schéma contient de listes, plus la réponse peut être longue.
-    # On part de 2048 et on ajoute 1024 par liste détectée (cap à 8192).
-    extract_max_tokens = min(2048 + 1024 * len(list_specs), 8192)
+    # On part de 4096 et on ajoute 2048 par liste détectée (cap à 16384).
+    extract_max_tokens = min(4096 + 2048 * len(list_specs), 16384)
 
     base_meta = {
         "agent_ids": [a["id"] for a in agents_data],
