@@ -3,8 +3,10 @@ Configuration centralisée via pydantic-settings.
 Les valeurs sont lues depuis le fichier .env à la racine du projet.
 """
 
+from typing import Annotated
+
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -30,7 +32,9 @@ class Settings(BaseSettings):
 
     # CORS — liste d'origines autorisées (séparées par virgule en .env)
     # Ex: CORS_ALLOWED_ORIGINS=https://sardine.sendoc.fr,https://app.sardine.sendoc.fr
-    CORS_ALLOWED_ORIGINS: list[str] = [
+    # NoDecode désactive le parsing JSON auto de pydantic-settings pour qu'on
+    # puisse parser nous-mêmes le format CSV via le validator ci-dessous.
+    CORS_ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",
         "http://localhost:3000",
     ]
