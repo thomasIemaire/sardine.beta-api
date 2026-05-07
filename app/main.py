@@ -193,10 +193,12 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-# CORS — à restreindre en production avec les origines spécifiques
+# CORS — origines autorisées définies dans .env (CORS_ALLOWED_ORIGINS).
+# Ne JAMAIS combiner allow_origins=["*"] et allow_credentials=True : le navigateur
+# rejette toute requête credentialed (Authorization, cookies) avec un wildcard.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -3,6 +3,7 @@ Configuration centralisée via pydantic-settings.
 Les valeurs sont lues depuis le fichier .env à la racine du projet.
 """
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +28,13 @@ class Settings(BaseSettings):
     # Application
     ENVIRONMENT: str = "development"
 
+    # CORS — liste d'origines autorisées (séparées par virgule en .env)
+    # Ex: CORS_ALLOWED_ORIGINS=https://sardine.sendoc.fr,https://app.sardine.sendoc.fr
+    CORS_ALLOWED_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ]
+
     # Purge corbeille : intervalle en heures entre deux exécutions
     TRASH_PURGE_INTERVAL_HOURS: int = 24
 
@@ -41,6 +49,16 @@ class Settings(BaseSettings):
     BREVO_SENDER_NAME: str = "Sardine"
 
     HF_TOKEN: str = ""  # Token d'accès Hugging Face pour les modèles privés
+
+    @field_validator("CORS_ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        """Accepte 'a,b,c' depuis .env en plus du format JSON natif."""
+        if isinstance(v, str):
+            return [s.strip().rstrip("/") for s in v.split(",") if s.strip()]
+        if isinstance(v, list):
+            return [str(s).strip().rstrip("/") for s in v if str(s).strip()]
+        return v
 
 
 settings = Settings()
